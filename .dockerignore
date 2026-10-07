@@ -1,0 +1,15 @@
+# Build output (rebuilt inside the image)
+target/
+
+# Git & IDE
+.git/
+.gitignore
+.idea/
+*.iml
+
+# Local logs / scratch
+*.log
+
+# Docs not needed in the image
+HELP.md
+HANDOVER.md
