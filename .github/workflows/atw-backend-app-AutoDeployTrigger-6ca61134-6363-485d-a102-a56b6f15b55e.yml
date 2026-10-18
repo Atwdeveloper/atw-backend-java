@@ -27,6 +27,9 @@ jobs:
           tenant-id: ${{ secrets.ATWBACKENDAPP_AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.ATWBACKENDAPP_AZURE_SUBSCRIPTION_ID }}
 
+      - name: Login to ACR
+        run: az acr login --name ca24a2b99736acr
+
       - name: Build and push container image to registry
         uses: azure/container-apps-deploy-action@v2
         with:
