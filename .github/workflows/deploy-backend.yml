@@ -9,18 +9,22 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: atw-backend-dev
+  cancel-in-progress: false
+
 jobs:
-  deploy:
+  build_push:
+    name: Build and push
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     environment: dev
 
-    concurrency:
-      group: atw-backend-dev
-      cancel-in-progress: false
-
     env:
       IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    outputs:
+      image_tag: ${{ env.IMAGE_TAG }}
 
     steps:
       - name: Checkout code
@@ -62,13 +66,30 @@ jobs:
           pull: true
           tags: ${{ vars.ACR_LOGIN_SERVER }}/atw-backend:${{ env.IMAGE_TAG }}
 
+  deploy:
+    name: Deploy
+    needs: build_push
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Configure settings and deploy
         uses: ./.github/actions/backend-tasks
         with:
           operation: deploy
           app_name: ${{ vars.BACKEND_APP_NAME }}
           resource_group: ${{ vars.AZURE_RESOURCE_GROUP }}
-          image: ${{ vars.ACR_LOGIN_SERVER }}/atw-backend:${{ env.IMAGE_TAG }}
+          image: ${{ vars.ACR_LOGIN_SERVER }}/atw-backend:${{ needs.build_push.outputs.image_tag }}
           key_vault_name: ${{ vars.KEY_VAULT_NAME }}
           runtime_identity_resource_id: ${{ vars.RUNTIME_IDENTITY_RESOURCE_ID }}
           app_config_endpoint: ${{ vars.APP_CONFIG_ENDPOINT }}
