@@ -1,0 +1,30 @@
+name: ATW Backend Tasks
+description: Custom project action for Maven builds, ACR login, and automatic backend configuration deployment.
+inputs:
+  operation:
+    description: "Choose build-jar, acr-login, or deploy."
+    required: true
+  acr_name:
+    description: Registry name for acr-login.
+    required: false
+  app_name:
+    description: Existing backend Container App name.
+    required: false
+  resource_group:
+    description: Backend Container App resource group.
+    required: false
+  image:
+    description: Fully qualified image with its immutable deployment tag.
+    required: false
+  key_vault_name:
+    description: Vault containing enabled backend- secrets.
+    required: false
+  runtime_identity_resource_id:
+    description: Full resource ID of the attached runtime user-assigned identity.
+    required: false
+  app_config_endpoint:
+    description: App Configuration endpoint containing backend- settings labeled dev.
+    required: false
+runs:
+  using: node24
+  main: index.js
