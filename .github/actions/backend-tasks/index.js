@@ -19,7 +19,6 @@ function input(name) {
 function azure(args, json = false) {
   const count =
     args[0] === 'containerapp' && args[1] === 'update' ? 2 : 3;
-
   const operation = args.slice(0, count).join(' ');
 
   console.log('Azure operation: ' + operation);
@@ -44,8 +43,7 @@ function azure(args, json = false) {
   } catch (error) {
     console.error('Azure operation failed: ' + operation);
 
-    // Display Azure's error without printing command arguments
-    // or captured configuration JSON.
+    // Display Azure's error without dumping arguments or configuration JSON.
     if (error.stderr) {
       console.error(String(error.stderr));
     }
@@ -80,17 +78,11 @@ function deploy() {
   // Read ordinary backend settings from App Configuration.
   const configuration = azure(
     [
-      'appconfig',
-      'kv',
-      'list',
-      '--endpoint',
-      endpoint,
-      '--auth-mode',
-      'login',
-      '--key',
-      'backend-*',
-      '--label',
-      'dev',
+      'appconfig', 'kv', 'list',
+      '--endpoint', endpoint,
+      '--auth-mode', 'login',
+      '--key', 'backend-*',
+      '--label', 'dev',
       '--all'
     ],
     true
@@ -100,11 +92,8 @@ function deploy() {
   // Container Apps retrieves their values using the runtime identity.
   const secretNames = azure(
     [
-      'keyvault',
-      'secret',
-      'list',
-      '--vault-name',
-      vault,
+      'keyvault', 'secret', 'list',
+      '--vault-name', vault,
       '--query',
       "[?starts_with(name, 'backend-') && attributes.enabled].name"
     ],
@@ -162,7 +151,6 @@ function deploy() {
       );
     }
 
-    // Generate a stable short name for the Container App secret reference.
     const shortName =
       'kv-' +
       createHash('sha256')
@@ -171,10 +159,7 @@ function deploy() {
         .slice(0, 16);
 
     const uri =
-      'https://' +
-      vault +
-      '.vault.azure.net/secrets/' +
-      key;
+      'https://' + vault + '.vault.azure.net/secrets/' + key;
 
     secretReferences.push(
       shortName +
@@ -187,34 +172,34 @@ function deploy() {
     settings.set(name, 'secretref:' + shortName);
   }
 
+  // NEW: Configure image-pull authentication using the attached runtime UAMI.
+  // Example: registry.azurecr.io/repository:tag -> registry.azurecr.io
+  const registryServer = image.split('/')[0];
+
+  azure([
+    'containerapp', 'registry', 'set',
+    '--name', app,
+    '--resource-group', group,
+    '--server', registryServer,
+    '--identity', identity
+  ]);
+
   // Create/update Key Vault references after validating all settings.
   azure([
-    'containerapp',
-    'secret',
-    'set',
-    '--name',
-    app,
-    '--resource-group',
-    group,
-    '--secrets',
-    ...secretReferences
+    'containerapp', 'secret', 'set',
+    '--name', app,
+    '--resource-group', group,
+    '--secrets', ...secretReferences
   ]);
 
   // Update the image and environment-variable mappings together.
   azure([
-    'containerapp',
-    'update',
-    '--name',
-    app,
-    '--resource-group',
-    group,
-    '--image',
-    image,
+    'containerapp', 'update',
+    '--name', app,
+    '--resource-group', group,
+    '--image', image,
     '--set-env-vars',
-    ...Array.from(
-      settings,
-      ([name, value]) => name + '=' + value
-    )
+    ...Array.from(settings, ([name, value]) => name + '=' + value)
   ]);
 
   console.log(
@@ -231,26 +216,13 @@ function main() {
     case 'build-jar':
       execFileSync(
         'bash',
-        [
-          './mvnw',
-          '--batch-mode',
-          '-DskipTests',
-          'package'
-        ],
-        {
-          stdio: 'inherit'
-        }
+        ['./mvnw', '--batch-mode', '-DskipTests', 'package'],
+        { stdio: 'inherit' }
       );
       return;
 
     case 'acr-login':
-      azure([
-        'acr',
-        'login',
-        '--name',
-        input('acr_name')
-      ]);
-
+      azure(['acr', 'login', '--name', input('acr_name')]);
       console.log('ACR login completed.');
       return;
 
