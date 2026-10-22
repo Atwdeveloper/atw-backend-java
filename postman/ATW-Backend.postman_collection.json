@@ -1,0 +1,249 @@
+{
+  "info": {
+    "name": "ATW Backend - Admin API",
+    "description": "Admin authentication, account self-service, and permission-catalog endpoints for the Anytime Work backend. Every response is wrapped in the standard envelope: {\"success\": boolean, \"data\": <payload|null>, \"error\": <ApiError|null>}. See FRONTEND_HANDOVER.md in the repo for the full error-code reference and the auth flow explanation.\n\nRequests that save tokens use a Tests script to populate the environment's accessToken/refreshToken/challengeId variables automatically — run them in order (Login -> Verify OTP -> ...) with the ATW Backend - Local environment selected.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "description": "Public endpoints under /api/admin/auth/** - no bearer token required.",
+      "item": [
+        {
+          "name": "Login (step 1 - password)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usernameOrEmail\": \"{{adminUsernameOrEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "description": "Verifies the password. If OTP is enabled (the default), returns {otpRequired: true, challengeId}; the OTP is emailed (or, with MAIL_PROVIDER=log, printed to the server log) - copy it into the Verify OTP request below. If OTP is disabled, returns {otpRequired: false, tokens} directly - same shape as Verify OTP's response."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  if (res.data.otpRequired) {",
+                  "    pm.environment.set('challengeId', res.data.challengeId);",
+                  "    console.log('OTP required - challengeId saved. Check the server log (or your inbox) for the code, then run Verify OTP.');",
+                  "  } else if (res.data.tokens) {",
+                  "    pm.environment.set('accessToken', res.data.tokens.accessToken);",
+                  "    pm.environment.set('refreshToken', res.data.tokens.refreshToken);",
+                  "    console.log('OTP disabled - tokens saved directly.');",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify OTP (step 2 - 2FA)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/auth/verify-otp", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "verify-otp"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challengeId\": \"{{challengeId}}\",\n  \"otp\": \"123456\"\n}"
+            },
+            "description": "Submits the 6-digit code for the challenge from Login. On success returns the full AuthTokens payload (accessToken, refreshToken, admin profile). Wrong code: 400 VALIDATION_ERROR. 6th wrong attempt in a row: 422 BUSINESS_RULE_VIOLATION (\"Too many invalid attempts\") even if you then submit the right code - request a new OTP via Resend or Login again."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('accessToken', res.data.accessToken);",
+                  "  pm.environment.set('refreshToken', res.data.refreshToken);",
+                  "  console.log('Tokens saved. admin.mustChangePassword =', res.data.admin.mustChangePassword);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend OTP",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/auth/resend-otp", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "resend-otp"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challengeId\": \"{{challengeId}}\"\n}"
+            },
+            "description": "Issues a fresh code and INVALIDATES the previous one (the old challengeId stops working the moment this succeeds). Returns a new challengeId - this request's Tests script overwrites the saved one. Subject to a cooldown (default 60s) and a cap on total resends per login attempt (default 3) - both return 422 BUSINESS_RULE_VIOLATION."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('challengeId', res.data.challengeId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "refresh"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "description": "Exchanges a valid refresh token for a new access+refresh pair, revoking the old refresh token (rotation - it cannot be reused after this). Call this when a protected request gets a 401 UNAUTHENTICATED because the access token (15 min default lifetime) expired. If the refresh token itself is expired/revoked, this also 401s - the user must log in again."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('accessToken', res.data.accessToken);",
+                  "  pm.environment.set('refreshToken', res.data.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/auth/logout", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "logout"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "description": "Revokes the given refresh token. Always returns success (idempotent) even if the token was already invalid. The frontend should also discard the access token client-side immediately - it stays technically valid until it naturally expires (max 15 min)."
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "forgot-password"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminUsernameOrEmail}}\"\n}"
+            },
+            "description": "Always returns success, whether or not the email belongs to an admin (prevents account enumeration - do not treat this response as confirmation the email exists). If it does, a reset link is emailed (or logged, with MAIL_PROVIDER=log) as {{atw.frontend.base-url}}/admin/reset-password?token=<token> - the frontend route should read that token param and POST it to Reset Password below."
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "reset-password"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"newPassword\": \"NewStrongPassword@123\"\n}"
+            },
+            "description": "Sets a new password from a reset-link token (30 min TTL by default). On success this ALSO: revokes every refresh token and access-token session for that admin, invalidates every other outstanding reset link and pending login-OTP for that admin, and sends a \"your password was changed\" email. newPassword must be 8-100 characters."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Account",
+      "description": "Authenticated self-service for the signed-in admin, under /api/admin/account/**. Requires Authorization: Bearer {{accessToken}}.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+      },
+      "item": [
+        {
+          "name": "Get My Profile (me)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/admin/account/me", "host": ["{{baseUrl}}"], "path": ["api", "admin", "account", "me"] },
+            "description": "Returns the signed-in admin's profile: id, username, email, fullName, superAdmin, roles, authorities, mustChangePassword. The frontend should check mustChangePassword right after login/verify-otp and, if true, redirect straight to a change-password screen - every OTHER endpoint will reject with 403 MUST_CHANGE_PASSWORD until it's changed (this endpoint and change-password are the only two exceptions)."
+          }
+        },
+        {
+          "name": "My Permissions",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/admin/account/my-permissions", "host": ["{{baseUrl}}"], "path": ["api", "admin", "account", "my-permissions"] },
+            "description": "Returns the effective permission codes for the signed-in admin, e.g. [\"staff.view\", \"roles.view\", ...]. A super-admin gets [\"*\"] (wildcard - has every permission; the frontend should treat \"*\" as all-access rather than trying to match it literally against a known code list)."
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": { "raw": "{{baseUrl}}/api/admin/account/change-password", "host": ["{{baseUrl}}"], "path": ["api", "admin", "account", "change-password"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{adminPassword}}\",\n  \"newPassword\": \"NewStrongPassword@123\"\n}"
+            },
+            "description": "Requires the current password. On success: revokes every other session (refresh + access tokens) for this admin on every device, invalidates any outstanding forgot-password reset link and pending login-OTP, and clears mustChangePassword. The CURRENT request's access token also stops working immediately after this - the frontend must log the user back in (or silently re-authenticate) right after a successful change."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "Permission-gated admin endpoints. Requires Authorization: Bearer {{accessToken}} AND the named permission (or super-admin).",
+      "auth": {
+        "type": "bearer",
+        "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+      },
+      "item": [
+        {
+          "name": "Permission Catalog",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/admin/permissions", "host": ["{{baseUrl}}"], "path": ["api", "admin", "permissions"] },
+            "description": "Requires the roles.view permission. Returns the full permission catalog grouped by module - [{module, permissions: [{code, action, label}]}] - for building a role editor matrix. Lacking the permission: 403 ACCESS_DENIED."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "description": "Public, unauthenticated.",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/actuator/health", "host": ["{{baseUrl}}"], "path": ["actuator", "health"] },
+            "description": "Returns {\"status\":\"UP\"} when healthy. Component detail (db, redis, mail) only shows for authenticated/authorized callers."
+          }
+        }
+      ]
+    }
+  ]
+}
