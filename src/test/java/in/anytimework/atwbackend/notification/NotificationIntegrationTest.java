@@ -8,6 +8,7 @@ import in.anytimework.atwbackend.notification.domain.NotificationStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.time.Duration;
 import java.util.List;
@@ -23,6 +24,7 @@ import static org.awaitility.Awaitility.await;
  * case also exercises the Modulith outbox (event publication registry).
  */
 @SpringBootTest
+@ActiveProfiles("test")
 class NotificationIntegrationTest {
 
     @Autowired

@@ -14,6 +14,8 @@ public record AdminTokenClaims(
         String fullName,
         boolean superAdmin,
         List<String> authorities,
-        List<String> roles
+        List<String> roles,
+        int securityVersion,
+        boolean mustChangePassword
 ) {
 }

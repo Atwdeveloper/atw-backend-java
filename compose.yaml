@@ -1,14 +1,91 @@
 # Local backing services for development.
-# Postgres and Redis run natively on this machine, so only the cloud-emulated services are here.
-# Start with:  docker compose up -d
+#
+# Day-to-day dev (default):  docker compose up -d
+#   Only the cloud-emulated service runs here — Postgres and Redis run natively on this machine
+#   (see memory/local setup notes). This is what you use while coding.
+#
+# Full stack (for a clean DevOps/handover smoke test, or onboarding without installing Postgres/
+# Redis natively):  docker compose --profile full-stack up --build
+#   Also runs Postgres, Redis, and the app itself in containers — self-contained, no native
+#   services required, and closer to the real Azure topology (containerized app + managed
+#   Postgres/Redis). Deliberately does NOT set SPRING_PROFILES_ACTIVE=local, so it exercises the
+#   exact same startup path (StartupSecurityValidator, safe-by-default bootstrap) as Azure would.
+#   Stop and wipe it with:  docker compose --profile full-stack down -v
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
     command: "azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck"
+    restart: unless-stopped
     ports:
       - "10000:10000"   # Blob service
     volumes:
       - azurite-data:/data
 
+  postgres:
+    image: postgres:18
+    profiles: ["full-stack"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atw
+      POSTGRES_USER: atw
+      POSTGRES_PASSWORD: atw
+    ports:
+      - "5433:5432"   # 5433 on the host to avoid clashing with a native Postgres on 5432
+    volumes:
+      # postgres:18+'s image expects a single mount at /var/lib/postgresql (not .../data) - it
+      # creates its own version-specific subdirectory under it for pg_upgrade --link support.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atw -d atw"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8
+    profiles: ["full-stack"]
+    restart: unless-stopped
+    ports:
+      - "6380:6379"   # 6380 on the host to avoid clashing with a native Redis on 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    profiles: ["full-stack"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      azurite:
+        condition: service_started
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/atw
+      DB_USERNAME: atw
+      DB_PASSWORD: atw
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      AZURE_STORAGE_ENDPOINT: http://azurite:10000/devstoreaccount1
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+      MAIL_PROVIDER: log   # OTP/reset emails print to `docker compose logs app` instead of sending
+      # application.properties defaults spring.profiles.active to "local" when this is unset at
+      # all - an explicit non-local/non-test value is required to actually exercise
+      # StartupSecurityValidator's real checks instead of silently hitting its local-profile exemption.
+      SPRING_PROFILES_ACTIVE: docker
+      # Deliberately real, non-default values — proves StartupSecurityValidator's checks pass with
+      # a properly configured deployment instead of relying on the local-profile exemption.
+      JWT_SECRET: "full-stack-smoke-test-signing-secret-do-not-reuse-0123456789ABCDEF"
+      ADMIN_BOOTSTRAP_ENABLED: "true"
+      ADMIN_BOOTSTRAP_EMAIL: "superadmin@anytimework.in"
+      ADMIN_BOOTSTRAP_PASSWORD: "FullStackSmoke@2026"
+    ports:
+      - "8081:8080"   # 8081 on the host to avoid clashing with a native-run instance on 8080
+
 volumes:
   azurite-data:
+  postgres-data:

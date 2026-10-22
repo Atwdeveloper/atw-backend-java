@@ -8,8 +8,10 @@ import in.anytimework.atwbackend.document.domain.DocumentRepository;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -30,8 +33,11 @@ class DocumentServiceImplTest {
     private final DocumentRepository repository = mock(DocumentRepository.class);
     private final FileStorage fileStorage = mock(FileStorage.class);
     private final DocumentProperties properties =
-            new DocumentProperties(1_000, List.of("application/pdf", "image/png"));
-    private final DocumentServiceImpl service = new DocumentServiceImpl(repository, fileStorage, properties);
+            new DocumentProperties(1_000, List.of("application/pdf", "image/png"),
+                    Duration.ofMinutes(10), Duration.ofMinutes(5));
+    private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    private final DocumentServiceImpl service =
+            new DocumentServiceImpl(repository, fileStorage, properties, transactionManager);
 
     @Test
     void upload_persistsMetadataAndStoresBytes() {
@@ -45,7 +51,9 @@ class DocumentServiceImplTest {
         assertThat(dto.originalFilename()).isEqualTo("pan.pdf");
         assertThat(dto.category()).isEqualTo("KYC");
         assertThat(dto.ownerId()).isEqualTo(owner);
-        verify(repository).save(any(Document.class));
+        // Saved twice: once committing the PENDING row before the upload, once committing the
+        // COMPLETE flip after it (see DocumentServiceImpl.upload()).
+        verify(repository, times(2)).save(any(Document.class));
         // Key is category/owner/uuid.ext; content + type are forwarded unchanged.
         verify(fileStorage).upload(anyString(), eq(bytes), eq("application/pdf"));
     }

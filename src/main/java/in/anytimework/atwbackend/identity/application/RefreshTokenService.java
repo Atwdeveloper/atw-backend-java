@@ -6,6 +6,7 @@ import in.anytimework.atwbackend.shared.security.OpaqueTokens;
 import in.anytimework.atwbackend.shared.security.jwt.JwtProperties;
 import in.anytimework.atwbackend.shared.exception.UnauthorizedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -58,7 +59,13 @@ public class RefreshTokenService {
         return next;
     }
 
-    @Transactional
+    /**
+     * REQUIRES_NEW so this always commits on its own, independent of any caller's transaction. In
+     * particular, {@code AuthService.refresh()} calls this from inside its own now-@Transactional
+     * method when an account turns out to be disabled, immediately followed by throwing — without
+     * REQUIRES_NEW, that enclosing transaction's rollback would silently undo this revoke too.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<UUID> revoke(String token) {
         return repository.findByTokenHash(OpaqueTokens.sha256Hex(token)).map(entity -> {
             entity.revoke(clock.instant());

@@ -82,6 +82,11 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
+		<!-- SMTP email transport (JavaMailSender auto-configuration), used by atw.mail.provider=smtp -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
 
 		<!-- Flyway database migrations (versions managed by Spring Boot BOM) -->
 		<!-- spring-boot-flyway carries the Boot 4 auto-configuration that runs

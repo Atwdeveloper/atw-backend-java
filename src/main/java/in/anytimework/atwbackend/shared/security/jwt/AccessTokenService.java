@@ -38,6 +38,8 @@ public class AccessTokenService {
                 .claim("super_admin", claims.superAdmin())
                 .claim("authorities", claims.authorities())
                 .claim("roles", claims.roles())
+                .claim("sv", claims.securityVersion())
+                .claim("must_change_password", claims.mustChangePassword())
                 .build();
         JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
         String token = jwtEncoder.encode(JwtEncoderParameters.from(header, claimsSet)).getTokenValue();

@@ -11,6 +11,7 @@ public record AdminProfile(
         String fullName,
         boolean superAdmin,
         List<String> roles,
-        List<String> authorities
+        List<String> authorities,
+        boolean mustChangePassword
 ) {
 }

@@ -44,7 +44,7 @@ class AuthServiceTest {
     private final NotificationService notificationService = mock(NotificationService.class);
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AdminSecurityProperties props = new AdminSecurityProperties(
-            true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 5, Duration.ofMinutes(15), Duration.ofMinutes(30));
+            true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 3, 5, Duration.ofMinutes(15), Duration.ofMinutes(30));
     private final Clock clock = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
 
     private final AuthService authService = new AuthService(adminUsers, authTokens, otpService, refreshTokenService,

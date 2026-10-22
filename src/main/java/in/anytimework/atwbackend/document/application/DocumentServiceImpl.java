@@ -8,7 +8,9 @@ import in.anytimework.atwbackend.document.domain.DocumentRepository;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
 import java.security.MessageDigest;
@@ -24,32 +26,42 @@ class DocumentServiceImpl implements DocumentService {
     private final DocumentRepository repository;
     private final FileStorage fileStorage;
     private final DocumentProperties properties;
+    private final TransactionTemplate transactionTemplate;
 
-    DocumentServiceImpl(DocumentRepository repository, FileStorage fileStorage, DocumentProperties properties) {
+    DocumentServiceImpl(DocumentRepository repository, FileStorage fileStorage, DocumentProperties properties,
+                         PlatformTransactionManager transactionManager) {
         this.repository = repository;
         this.fileStorage = fileStorage;
         this.properties = properties;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
+    // Split into two independently-committed transactions around the blob upload: if the final
+    // commit (the PENDING -> COMPLETE flip) fails after the upload already succeeded, it leaves a
+    // detectable PENDING row instead of a silent, untracked orphan blob, which the reconciliation
+    // job (DocumentUploadReconciliationJob) then heals.
     @Override
-    @Transactional
     public DocumentDto upload(UploadDocumentCommand command) {
         validate(command);
         String storageKey = buildStorageKey(command);
         String checksum = sha256(command.content());
 
-        // Persist metadata first: if the blob upload then fails, the transaction rolls back and we
-        // are left with neither a row nor an orphaned blob.
-        Document document = repository.save(new Document(
+        Document document = transactionTemplate.execute(status -> repository.save(new Document(
                 storageKey,
                 command.originalFilename(),
                 command.contentType(),
                 command.content().length,
                 checksum,
                 command.category(),
-                command.ownerId()));
+                command.ownerId())));
 
         fileStorage.upload(storageKey, command.content(), command.contentType());
+
+        transactionTemplate.executeWithoutResult(status -> {
+            document.markComplete();
+            repository.save(document);
+        });
+
         return toDto(document);
     }
 

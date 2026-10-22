@@ -134,15 +134,30 @@ public class AuthService {
         return otp.otpId();
     }
 
-    /** Exchange a valid refresh token for a new token pair (rotating the refresh token). */
+    /**
+     * Exchange a valid refresh token for a new token pair (rotating the refresh token).
+     *
+     * <p>{@code @Transactional} here (default propagation) means the inner calls on
+     * {@link RefreshTokenService} join this same transaction/connection instead of each opening
+     * their own, so the pessimistic lock taken below is held for the whole method — across both
+     * {@code validateActive} calls and the {@code rotate} call — not released early. This closes a
+     * TOCTOU race against a concurrent password reset/change: that path takes the same per-admin
+     * row lock before revoking refresh tokens and bumping the security version, so whichever side
+     * gets the lock first is the one whose effects the other observes.</p>
+     */
+    @Transactional
     public AuthTokens refresh(String refreshToken, String ip, String userAgent) {
-        RefreshToken current = refreshTokenService.validateActive(refreshToken);
-        AdminUser admin = adminUsers.findById(current.getAdminUserId())
+        RefreshToken precheck = refreshTokenService.validateActive(refreshToken);
+        AdminUser admin = adminUsers.findByIdForUpdate(precheck.getAdminUserId())
                 .orElseThrow(() -> new UnauthorizedException("Invalid refresh token"));
         if (!admin.isActive()) {
             refreshTokenService.revoke(refreshToken);
             throw new UnauthorizedException("Account is disabled.");
         }
+        // Re-validate now that we hold the admin row lock: a concurrent password reset/change that
+        // revoked this token had to acquire the same lock first, so if it already committed, THIS
+        // second check (not the first one above) is what actually observes that revocation.
+        RefreshToken current = refreshTokenService.validateActive(refreshToken);
         RefreshTokenService.IssuedRefresh rotated = refreshTokenService.rotate(current, ip, userAgent);
         audit.record(admin.getId(), "TOKEN_REFRESHED", null, ip, userAgent);
         return buildTokens(admin, rotated.token());
@@ -171,18 +186,33 @@ public class AuthService {
 
     @Transactional
     public void resetPassword(String token, String newPassword, String ip, String userAgent) {
-        AuthToken authToken = authTokens.findByTokenHash(OpaqueTokens.sha256Hex(token))
+        String tokenHash = OpaqueTokens.sha256Hex(token);
+        AuthToken precheck = authTokens.findByTokenHash(tokenHash)
                 .orElseThrow(() -> new ValidationException("Invalid or expired reset link"));
-        if (authToken.getType() != AuthTokenType.PASSWORD_RESET || !authToken.isUsable(clock.instant())) {
+        if (precheck.getType() != AuthTokenType.PASSWORD_RESET) {
             throw new ValidationException("Invalid or expired reset link");
         }
-        AdminUser admin = adminUsers.findById(authToken.getAdminUserId())
+        // Pessimistic lock: the other half of the refresh()/reset race fix — both sides lock the
+        // same admin row, so whichever commits first is the one the other observes.
+        AdminUser admin = adminUsers.findByIdForUpdate(precheck.getAdminUserId())
                 .orElseThrow(() -> new ValidationException("Invalid or expired reset link"));
+        // Re-read and re-validate the token now that we hold the admin lock: a concurrent reset
+        // using a sibling reset token could have invalidated this one (via invalidateActiveTokens
+        // below) while this request was waiting for the lock — only a fresh read after the lock,
+        // not the pre-lock snapshot above, actually observes that.
+        AuthToken authToken = authTokens.findByTokenHash(tokenHash)
+                .orElseThrow(() -> new ValidationException("Invalid or expired reset link"));
+        if (!authToken.isUsable(clock.instant())) {
+            throw new ValidationException("Invalid or expired reset link");
+        }
         admin.changePassword(passwordEncoder.encode(newPassword));
+        admin.bumpSecurityVersion();
         adminUsers.save(admin);
         authToken.markUsed(clock.instant());
         authTokens.save(authToken);
         refreshTokenService.revokeAllForAdmin(admin.getId());
+        authTokens.invalidateActiveTokens(admin.getId(), AuthTokenType.PASSWORD_RESET, clock.instant());
+        otpService.invalidateAllActiveForAdmin(admin.getId());
         notificationService.enqueue(new SendEmailCommand(CHANGED_TEMPLATE, admin.getEmail(),
                 Map.of("name", admin.getFullName())));
         audit.record(admin.getId(), "PASSWORD_RESET", null, ip, userAgent);
@@ -207,9 +237,9 @@ public class AuthService {
         List<String> roles = adminUsers.findRoleNames(admin.getId());
         AccessTokenService.IssuedAccessToken access = accessTokenService.issue(new AdminTokenClaims(
                 admin.getId(), admin.getUsername(), admin.getEmail(), admin.getFullName(),
-                admin.isSuperAdmin(), authorities, roles));
+                admin.isSuperAdmin(), authorities, roles, admin.getSecurityVersion(), admin.isMustChangePassword()));
         AdminProfile profile = new AdminProfile(admin.getId(), admin.getUsername(), admin.getEmail(),
-                admin.getFullName(), admin.isSuperAdmin(), roles, authorities);
+                admin.getFullName(), admin.isSuperAdmin(), roles, authorities, admin.isMustChangePassword());
         return new AuthTokens(access.token(), "Bearer", access.expiresInSeconds(), refreshToken, profile);
     }
 }

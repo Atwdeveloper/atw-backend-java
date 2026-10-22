@@ -14,16 +14,18 @@ import java.time.Clock;
 /**
  * Writes an {@link ApiResponse} error body straight to the servlet response.
  *
- * <p>Used by the security entry point and access-denied handler, which run inside the
- * filter chain — before {@code @RestControllerAdvice} can apply — so they must render
- * the envelope themselves to keep error responses consistent.</p>
+ * <p>Used by the security entry point, access-denied handler, and other filters that run inside
+ * the filter chain — before {@code @RestControllerAdvice} can apply — so they must render
+ * the envelope themselves to keep error responses consistent. Public so any filter in the
+ * security chain (e.g. {@code AdminSessionPolicyFilter}) can reuse it instead of duplicating
+ * response-building logic.</p>
  */
-final class ErrorResponseWriter {
+public final class ErrorResponseWriter {
 
     private ErrorResponseWriter() {
     }
 
-    static void write(HttpServletResponse response, HttpStatus status, String code,
+    public static void write(HttpServletResponse response, HttpStatus status, String code,
                       String message, ObjectMapper objectMapper, Clock clock) throws IOException {
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);

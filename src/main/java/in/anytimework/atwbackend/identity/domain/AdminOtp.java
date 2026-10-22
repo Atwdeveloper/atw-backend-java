@@ -43,17 +43,22 @@ public class AdminOtp extends BaseEntity {
     @Column(nullable = false)
     private int attempts;
 
+    @Column(name = "resend_count", nullable = false)
+    private int resendCount;
+
     protected AdminOtp() {
         // required by JPA
     }
 
-    public AdminOtp(UUID adminUserId, OtpChannel channel, String codeHash, OtpPurpose purpose, Instant expiresAt) {
+    public AdminOtp(UUID adminUserId, OtpChannel channel, String codeHash, OtpPurpose purpose, Instant expiresAt,
+                     int resendCount) {
         this.adminUserId = adminUserId;
         this.channel = channel;
         this.codeHash = codeHash;
         this.purpose = purpose;
         this.expiresAt = expiresAt;
         this.attempts = 0;
+        this.resendCount = resendCount;
     }
 
     public boolean isConsumed() {

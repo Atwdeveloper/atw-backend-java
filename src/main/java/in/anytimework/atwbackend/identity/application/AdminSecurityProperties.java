@@ -14,6 +14,7 @@ public record AdminSecurityProperties(
         int otpLength,
         int otpMaxAttempts,
         Duration otpResendInterval,
+        int otpMaxResends,
         int maxFailedLogins,
         Duration lockoutDuration,
         Duration passwordResetTtl

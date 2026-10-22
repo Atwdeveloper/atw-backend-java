@@ -61,6 +61,9 @@ public class AdminUser extends BaseEntity {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    @Column(name = "security_version", nullable = false)
+    private int securityVersion;
+
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(name = "admin_user_role",
             joinColumns = @JoinColumn(name = "admin_user_id"),
@@ -82,6 +85,7 @@ public class AdminUser extends BaseEntity {
         this.mustChangePassword = mustChangePassword;
         this.status = AdminStatus.ACTIVE;
         this.failedLoginAttempts = 0;
+        this.securityVersion = 1;
     }
 
     public boolean isActive() {
@@ -112,6 +116,11 @@ public class AdminUser extends BaseEntity {
     public void changePassword(String newPasswordHash) {
         this.passwordHash = newPasswordHash;
         this.mustChangePassword = false;
+    }
+
+    /** Bumps the security version, invalidating any session/token minted under the old value. */
+    public void bumpSecurityVersion() {
+        this.securityVersion++;
     }
 
     public void assignRole(Role role) {

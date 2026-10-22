@@ -3,6 +3,8 @@ package in.anytimework.atwbackend.document.domain;
 import in.anytimework.atwbackend.shared.persistence.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import lombok.Getter;
 
@@ -41,6 +43,10 @@ public class Document extends BaseEntity {
     @Column(name = "owner_id")
     private UUID ownerId;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "upload_status", nullable = false, length = 20)
+    private DocumentUploadStatus uploadStatus;
+
     protected Document() {
         // required by JPA
     }
@@ -54,5 +60,16 @@ public class Document extends BaseEntity {
         this.checksumSha256 = checksumSha256;
         this.category = category;
         this.ownerId = ownerId;
+        this.uploadStatus = DocumentUploadStatus.PENDING;
+    }
+
+    /** Marks the row {@code COMPLETE} once the blob upload and its follow-up commit both succeed. */
+    public void markComplete() {
+        this.uploadStatus = DocumentUploadStatus.COMPLETE;
+    }
+
+    /** Marks the row {@code FAILED}; used by the reconciliation job when no blob ever landed. */
+    public void markFailed() {
+        this.uploadStatus = DocumentUploadStatus.FAILED;
     }
 }
