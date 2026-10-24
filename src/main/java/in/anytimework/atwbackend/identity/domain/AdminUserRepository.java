@@ -37,6 +37,9 @@ public interface AdminUserRepository extends JpaRepository<AdminUser, UUID> {
     @Query("select a.securityVersion as securityVersion, a.status as status from AdminUser a where a.id = :id")
     Optional<SecurityProjection> findSecurityProjectionById(@Param("id") UUID id);
 
+    /** How many admins currently hold this role — used to block deleting a role still in use. */
+    long countByRolesId(UUID roleId);
+
     interface SecurityProjection {
         int getSecurityVersion();
 

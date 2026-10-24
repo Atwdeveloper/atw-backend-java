@@ -30,7 +30,7 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 public class SecurityConfig {
 
     private static final String[] PUBLIC_PATHS = {
-            "/api/admin/auth/**",
+            AdminAuthPaths.AUTH_PREFIX + "**",
             "/actuator/health/**",
             "/actuator/info",
             "/v3/api-docs/**",
@@ -45,7 +45,8 @@ public class SecurityConfig {
             AuthenticationEntryPoint authenticationEntryPoint,
             AccessDeniedHandler accessDeniedHandler,
             JwtAuthenticationConverter jwtAuthenticationConverter,
-            AdminSessionPolicyFilter adminSessionPolicyFilter) throws Exception {
+            AdminSessionPolicyFilter adminSessionPolicyFilter,
+            AuthRateLimitFilter authRateLimitFilter) throws Exception {
 
         http
                 .csrf(csrf -> csrf.disable())
@@ -58,6 +59,8 @@ public class SecurityConfig {
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter))
                         .authenticationEntryPoint(authenticationEntryPoint))
+                // Rejects abusive request volume on public auth endpoints before anything else runs.
+                .addFilterBefore(authRateLimitFilter, BearerTokenAuthenticationFilter.class)
                 // Beyond signature/expiry: current security version + active status + must-change-password gate.
                 .addFilterAfter(adminSessionPolicyFilter, BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex

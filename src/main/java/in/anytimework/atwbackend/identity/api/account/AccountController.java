@@ -1,10 +1,11 @@
 package in.anytimework.atwbackend.identity.api.account;
 
-import in.anytimework.atwbackend.identity.api.HttpRequests;
 import in.anytimework.atwbackend.identity.api.account.dto.ChangePasswordRequest;
 import in.anytimework.atwbackend.identity.application.AdminAccountService;
 import in.anytimework.atwbackend.identity.application.dto.AdminProfile;
 import in.anytimework.atwbackend.shared.api.ApiResponse;
+import in.anytimework.atwbackend.shared.api.ApiVersions;
+import in.anytimework.atwbackend.shared.security.HttpRequests;
 import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -18,7 +19,7 @@ import java.util.List;
 
 /** Authenticated self-service for the signed-in admin (any authenticated admin; no permission needed). */
 @RestController
-@RequestMapping("/api/admin/account")
+@RequestMapping(ApiVersions.V1 + "/admin/account")
 public class AccountController {
 
     private final AdminAccountService accountService;

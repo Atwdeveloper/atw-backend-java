@@ -16,7 +16,6 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.Clock;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -40,12 +39,6 @@ import java.util.UUID;
 @Component
 public class AdminSessionPolicyFilter extends OncePerRequestFilter {
 
-    private static final String PUBLIC_AUTH_PREFIX = "/api/admin/auth/";
-    private static final Set<String> ALLOWED_WHILE_MUST_CHANGE_PASSWORD = Set.of(
-            "/api/admin/account/change-password",
-            "/api/admin/account/me"
-    );
-
     private final AdminSecurityStateProvider stateProvider;
     private final ObjectMapper objectMapper;
     private final Clock clock;
@@ -60,7 +53,7 @@ public class AdminSessionPolicyFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         String path = request.getRequestURI().substring(request.getContextPath().length());
-        if (path.startsWith(PUBLIC_AUTH_PREFIX)) {
+        if (path.startsWith(AdminAuthPaths.AUTH_PREFIX)) {
             chain.doFilter(request, response);
             return;
         }
@@ -88,7 +81,7 @@ public class AdminSessionPolicyFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (mustChangePassword && !ALLOWED_WHILE_MUST_CHANGE_PASSWORD.contains(path)) {
+        if (mustChangePassword && !AdminAuthPaths.ALLOWED_WHILE_MUST_CHANGE_PASSWORD.contains(path)) {
             ErrorResponseWriter.write(response, HttpStatus.FORBIDDEN, "MUST_CHANGE_PASSWORD",
                     "You must change your password before continuing.", objectMapper, clock);
             return;

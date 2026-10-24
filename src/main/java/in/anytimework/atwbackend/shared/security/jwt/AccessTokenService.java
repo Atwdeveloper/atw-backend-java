@@ -27,22 +27,25 @@ public class AccessTokenService {
     public IssuedAccessToken issue(AdminTokenClaims claims) {
         Instant now = clock.instant();
         Instant expiresAt = now.plus(properties.accessTtl());
-        JwtClaimsSet claimsSet = JwtClaimsSet.builder()
+        JwtClaimsSet.Builder builder = JwtClaimsSet.builder()
                 .issuer(properties.issuer())
                 .issuedAt(now)
                 .expiresAt(expiresAt)
                 .subject(claims.adminId().toString())
-                .claim("username", claims.username())
                 .claim("email", claims.email())
                 .claim("name", claims.fullName())
                 .claim("super_admin", claims.superAdmin())
                 .claim("authorities", claims.authorities())
                 .claim("roles", claims.roles())
                 .claim("sv", claims.securityVersion())
-                .claim("must_change_password", claims.mustChangePassword())
-                .build();
+                .claim("must_change_password", claims.mustChangePassword());
+        // username is optional (an admin created via the Staff API may not have one) - JwtClaimsSet
+        // rejects a null claim value outright, so omit the claim entirely rather than pass null.
+        if (claims.username() != null) {
+            builder.claim("username", claims.username());
+        }
         JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
-        String token = jwtEncoder.encode(JwtEncoderParameters.from(header, claimsSet)).getTokenValue();
+        String token = jwtEncoder.encode(JwtEncoderParameters.from(header, builder.build())).getTokenValue();
         return new IssuedAccessToken(token, expiresAt, properties.accessTtl().toSeconds());
     }
 

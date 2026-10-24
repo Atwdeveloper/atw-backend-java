@@ -80,6 +80,11 @@ services:
       # Deliberately real, non-default values — proves StartupSecurityValidator's checks pass with
       # a properly configured deployment instead of relying on the local-profile exemption.
       JWT_SECRET: "full-stack-smoke-test-signing-secret-do-not-reuse-0123456789ABCDEF"
+      # Smoke-test-only AES-256 key (base64, 32 bytes) for the staff KYC/bank-detail PII encryption
+      # feature — generated fresh for this file, never reused for a real environment. Required as of
+      # the PII-encryption-at-rest change: StartupSecurityValidator refuses to boot without one
+      # outside local/test, same as JWT_SECRET above.
+      PII_ENCRYPTION_KEY: "mX4cIb6TukLLUE701/Xx/e/dDyD7CtDYyY59wmYFxQE="
       ADMIN_BOOTSTRAP_ENABLED: "true"
       ADMIN_BOOTSTRAP_EMAIL: "superadmin@anytimework.in"
       ADMIN_BOOTSTRAP_PASSWORD: "FullStackSmoke@2026"

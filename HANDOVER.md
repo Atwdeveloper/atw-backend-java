@@ -57,6 +57,7 @@ changes are needed between local and Azure — only these variables differ.
 | `REDIS_PASSWORD` | ✅ | *(access key)* | Cache access key |
 | `REDIS_SSL` | ✅ | `true` | Enable TLS (Azure requires it) |
 | `JWT_SECRET` | ✅ | *(secret, ≥32 bytes, unique per environment)* | HS256 signing key for admin access tokens. **There is no insecure fallback** — see §8. |
+| `PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment)* | AES-256-GCM key encrypting staff KYC numbers and bank account numbers at rest. **No insecure fallback, same as `JWT_SECRET`** — see §8. |
 
 > ⚠️ **Do not set `SPRING_PROFILES_ACTIVE` to `local` (or include `local` in a comma-list) anywhere
 > outside a developer's own machine.** That profile layers in a publicly-committed dev JWT secret and
@@ -96,6 +97,8 @@ actual smoke test (§7).
 | `ADMIN_OTP_MAX_ATTEMPTS` | `5` | Wrong-code attempts before a challenge is locked out |
 | `ADMIN_OTP_MAX_RESENDS` | `3` | Resends allowed per login attempt before it must restart |
 | `ADMIN_MAX_FAILED_LOGINS` / `ADMIN_LOCKOUT_DURATION` | `5` / `PT15M` | Password-attempt lockout |
+| `ADMIN_RATE_LIMIT_ENABLED` / `_MAX_ATTEMPTS` / `_WINDOW` | `true` / `10` / `PT1M` | Per-IP request cap on login/forgot-password/reset-password/accept-invite (Redis-backed, holds across replicas) |
+| `ADMIN_OTP_IN_RESPONSE` | `false` | Test-only: puts the OTP directly in the login/resend-otp response instead of only emailing it. **Refused at startup outside local/test** — see §8. |
 | `DOC_RECONCILE_STALE_AFTER` / `DOC_RECONCILE_INTERVAL` | `PT10M` / `PT5M` | How a background job self-heals a document upload that uploaded its blob but didn't finish committing |
 
 > Store every secret (`DB_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `ADMIN_BOOTSTRAP_PASSWORD`, mail
@@ -158,10 +161,27 @@ Flyway runs **automatically on startup** and applies every `src/main/resources/d
 in order. The DB must be reachable at boot with **DDL rights**.
 `spring.jpa.hibernate.ddl-auto=validate` — Hibernate only validates the schema; it never alters it.
 
-Current migrations (V1–V7): admin identity, documents, notifications/email templates, RBAC
+Current migrations (V1–V16): admin identity, documents, notifications/email templates, RBAC
 (permissions/roles/admin accounts), admin security hardening (OTP resend tracking, per-account
-security-version for session revocation), document upload status tracking, and one data-only fix to a
-broken Thymeleaf attribute in the seeded password-reset email template.
+security-version for session revocation), document upload status tracking, a data-only fix to a
+broken Thymeleaf attribute in the seeded password-reset email template, a rename of the admin
+refresh-token/auth-token tables to `admin_refresh_token`/`admin_auth_token`, three staff
+profile/KYC/bank-detail satellite tables, the seeded email template for the staff-invite flow,
+refresh-token "family" tracking for reuse detection, case-insensitive-identifier enforcement on
+`admin_user` (lowercase + a CHECK constraint), widening the KYC/bank-detail columns for encrypted
+storage plus the `admin_staff.view_kyc` / `admin_staff.view_bank_details` permissions, an `actor_email`
+snapshot column on `admin_audit_log` so deleting a staff account doesn't strip attribution from
+their historical audit entries, renaming the `staff`/`roles` permission modules to
+`admin_staff`/`admin_roles` (code/module columns only, in place — same permission ids, so every
+existing role grant survives) to avoid a future collision with a company-side "staff"/"roles"
+concept, and — the same reasoning taken one layer deeper — renaming the `role`, `permission`, and
+`role_permission` tables themselves to `admin_role`/`admin_permission`/`admin_role_permission`
+(plain `ALTER TABLE ... RENAME TO`, all data/ids/FK relationships preserved automatically). The
+matching Java classes (`StaffService` → `AdminStaffService`, `Role` → `AdminRole`,
+`Permission` → `AdminPermission`, `RoleRepository`/`PermissionRepository` → `AdminRoleRepository`/
+`AdminPermissionRepository`, etc.) and permission-code literals were renamed in the same changes.
+`admin_user*` and API URLs (`/api/v1/admin/staff`, `/api/v1/admin/roles`) were already unambiguous
+and are unchanged.
 
 ---
 
@@ -175,21 +195,21 @@ real values returned by each step — see **FRONTEND_HANDOVER.md** for the full 
 curl <BASE>/actuator/health                       # -> {"status":"UP"}
 
 # 2. Log in as the bootstrap super-admin (password step)
-curl -X POST <BASE>/api/admin/auth/login -H "Content-Type: application/json" \
+curl -X POST <BASE>/api/v1/admin/auth/login -H "Content-Type: application/json" \
   -d '{"usernameOrEmail":"<ADMIN_BOOTSTRAP_EMAIL>","password":"<ADMIN_BOOTSTRAP_PASSWORD>"}'
 #   -> {"success":true,"data":{"otpRequired":true,"challengeId":"..."}}
 #   The OTP is emailed via whatever MAIL_PROVIDER is configured (or printed to the app log if "log").
 
 # 3. Verify the OTP
-curl -X POST <BASE>/api/admin/auth/verify-otp -H "Content-Type: application/json" \
+curl -X POST <BASE>/api/v1/admin/auth/verify-otp -H "Content-Type: application/json" \
   -d '{"challengeId":"<challengeId>","otp":"<otp>"}'
 #   -> {"success":true,"data":{"accessToken":"...","admin":{"mustChangePassword":true,...}}}
 
 # 4. Confirm the forced-password-change gate is active (expect 403 MUST_CHANGE_PASSWORD)
-curl <BASE>/api/admin/account/my-permissions -H "Authorization: Bearer <accessToken>"
+curl <BASE>/api/v1/admin/account/my-permissions -H "Authorization: Bearer <accessToken>"
 
 # 5. Change the bootstrap password (now usable — anyone else with the bootstrap password can't log in anymore)
-curl -X POST <BASE>/api/admin/account/change-password -H "Authorization: Bearer <accessToken>" \
+curl -X POST <BASE>/api/v1/admin/account/change-password -H "Authorization: Bearer <accessToken>" \
   -H "Content-Type: application/json" \
   -d '{"currentPassword":"<ADMIN_BOOTSTRAP_PASSWORD>","newPassword":"<a-real-strong-password>"}'
 ```
@@ -206,18 +226,46 @@ dockerized Postgres/Redis/the app itself — see §9) and produces exactly the r
 
 ## 8. Security notes (read this before your first real deploy)
 
-- **No insecure fallback for `JWT_SECRET`.** Startup has a dedicated check
+- **No insecure fallback for `JWT_SECRET` or `PII_ENCRYPTION_KEY`.** Startup has a dedicated check
   (`StartupSecurityValidator`) that refuses to boot — throws and exits non-zero — if, outside the
-  `local`/`test` Spring profiles, the JWT secret is missing, shorter than 32 bytes, or equal to the
-  publicly-committed local-dev literal. Same check for `ADMIN_BOOTSTRAP_PASSWORD` when bootstrap is
-  enabled. **A failed deploy here means a missing/weak secret, not a bug** — fix the env var, don't
-  work around the check.
+  `local`/`test` Spring profiles: the JWT secret is missing, shorter than 32 bytes, or the
+  publicly-committed local-dev literal; the PII key is missing, not valid base64, doesn't decode to
+  exactly 32 bytes, or is the publicly-committed local-dev literal; or `ADMIN_OTP_IN_RESPONSE` is
+  left on. Same check for `ADMIN_BOOTSTRAP_PASSWORD` when bootstrap is enabled. **A failed deploy
+  here means a missing/weak secret (or a test-only flag left on), not a bug** — fix the env var,
+  don't work around the check.
+- **Staff KYC numbers and bank account numbers are encrypted at rest** (AES-256-GCM, a fresh random
+  IV per value) and masked in every API response unless the caller holds the narrower
+  `admin_staff.view_kyc` / `admin_staff.view_bank_details` permission.
 - **Access tokens can be revoked before they expire.** Each admin carries a `securityVersion`; a
   password change/reset or account disable bumps it, and every authenticated request checks the
   token's version against the live value — so a stolen/leaked token stops working immediately, not
   just at its natural 15-minute expiry.
+- **Refresh-token reuse is detected, not just rejected.** Replaying a token that was already rotated
+  away (not merely expired) revokes every token in that session's rotation chain, not just the
+  replayed one — see FRONTEND_HANDOVER.md §3.2.
 - **OTP brute-force is rate-limited and the limit is actually enforced** (persists across concurrent
-  attempts too) — 5 wrong codes locks the challenge; resends are cooldown- and count-limited.
+  attempts too) — 5 wrong codes locks the challenge; resends are cooldown- and count-limited. On top
+  of that, `login`/`verify-otp`/`resend-otp`/`forgot-password`/`reset-password`/`accept-invite` now
+  also have a general, Redis-backed per-IP request cap (`ADMIN_RATE_LIMIT_*`), independent of those
+  per-challenge limits. **A Redis outage does not take auth down with it** — `RateLimiter.allow`
+  catches `DataAccessException` and fails open (logs a warning, lets the request through) rather than
+  propagating; this runs inside a `Filter`, ahead of the servlet dispatcher, so an uncaught exception
+  there would have bypassed `GlobalExceptionHandler` entirely and surfaced as a raw error page on
+  every login attempt during the outage. Covered by `RateLimiterRedisOutageTest` (simulated
+  connection failure) alongside `RateLimiterTest` (real Redis, happy path).
+- **The per-IP rate limit (and audit IP attribution) trusts exactly one proxy hop in `X-Forwarded-For`**
+  (`HttpRequests.clientIp`, takes the last entry, not the first) — this assumes Azure Container
+  Apps' own ingress is the only reverse proxy in front of the app. If a WAF, CDN, or Application
+  Gateway is ever added in front of it, this needs to trust a different hop count or it starts
+  trusting an attacker-controllable value again.
+- **A caller can never grant a permission they don't themselves hold** — enforced on both role
+  definition (`POST`/`PUT /api/v1/admin/roles`) and role assignment (`POST`/`PUT /api/v1/admin/staff`),
+  so holding only `admin_staff.edit` or only `admin_roles.edit` can't be used to self-escalate via a custom role.
+  Super-admins are exempt (they already hold everything implicitly).
+- **`admin_user.email`/`username` are enforced lowercase** (normalized on write, plus a DB CHECK
+  constraint) so a case-only duplicate (`Riya@x.com` vs `riya@x.com`) can't slip past the
+  case-insensitive login lookup and the case-insensitive pre-create uniqueness check.
 - **CSRF is disabled** — this is a stateless, bearer-token JSON API with no cookie-based session, so
   CSRF doesn't apply the way it would to a cookie-authenticated app. Don't add cookie-based auth
   without reintroducing CSRF protection.
@@ -261,4 +309,6 @@ quirk, unrelated to the app or to how Azure's build pipeline will behave.
   environment.
 - No HTTPS/TLS termination is handled by the app; terminate TLS at the Azure ingress.
 - See **FRONTEND_HANDOVER.md** for the complete API reference (every endpoint, every error code) and
-  **postman/** for a ready-to-import Postman collection the frontend team is already using.
+  **postman/** for a ready-to-import Postman collection — both are kept current as the API evolves,
+  ready for whenever the frontend handover happens; no frontend team has received them yet, so there
+  is no live consumer depending on the pre-rename `staff.*`/`roles.*` permission codes.

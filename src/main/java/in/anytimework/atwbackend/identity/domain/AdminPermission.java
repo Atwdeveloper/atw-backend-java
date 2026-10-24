@@ -12,8 +12,8 @@ import lombok.Getter;
  */
 @Getter
 @Entity
-@Table(name = "permission")
-public class Permission extends BaseEntity {
+@Table(name = "admin_permission")
+public class AdminPermission extends BaseEntity {
 
     @Column(nullable = false, length = 100, unique = true)
     private String code;
@@ -27,11 +27,11 @@ public class Permission extends BaseEntity {
     @Column(length = 150)
     private String label;
 
-    protected Permission() {
+    protected AdminPermission() {
         // required by JPA
     }
 
-    public Permission(String code, String module, String action, String label) {
+    public AdminPermission(String code, String module, String action, String label) {
         this.code = code;
         this.module = module;
         this.action = action;

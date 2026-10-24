@@ -20,6 +20,12 @@ public class AdminAuditLog extends BaseEntity {
     @Column(name = "actor_admin_id")
     private UUID actorAdminId;
 
+    // Snapshot at write time, not a live join - admin_audit_log.actor_admin_id is ON DELETE SET
+    // NULL, so once an admin account is deleted this is the only thing that still identifies who
+    // performed their past actions. See the V14 migration comment.
+    @Column(name = "actor_email", length = 320)
+    private String actorEmail;
+
     @Column(name = "actor_type", nullable = false, length = 20)
     private String actorType;
 
@@ -48,9 +54,10 @@ public class AdminAuditLog extends BaseEntity {
         // required by JPA
     }
 
-    public AdminAuditLog(UUID actorAdminId, String actorType, String action, String subjectType,
+    public AdminAuditLog(UUID actorAdminId, String actorEmail, String actorType, String action, String subjectType,
                          String subjectId, String detail, String ipAddress, String userAgent, String correlationId) {
         this.actorAdminId = actorAdminId;
+        this.actorEmail = actorEmail;
         this.actorType = actorType;
         this.action = action;
         this.subjectType = subjectType;

@@ -1,7 +1,7 @@
 package in.anytimework.atwbackend.identity.application;
 
-import in.anytimework.atwbackend.identity.domain.Permission;
-import in.anytimework.atwbackend.identity.domain.PermissionRepository;
+import in.anytimework.atwbackend.identity.domain.AdminPermission;
+import in.anytimework.atwbackend.identity.domain.AdminPermissionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,14 +11,14 @@ import java.util.List;
 @Service
 public class PermissionCatalogService {
 
-    private final PermissionRepository permissions;
+    private final AdminPermissionRepository permissions;
 
-    public PermissionCatalogService(PermissionRepository permissions) {
+    public PermissionCatalogService(AdminPermissionRepository permissions) {
         this.permissions = permissions;
     }
 
     @Transactional(readOnly = true)
-    public List<Permission> catalog() {
+    public List<AdminPermission> catalog() {
         return permissions.findAllByOrderByModuleAscActionAsc();
     }
 }

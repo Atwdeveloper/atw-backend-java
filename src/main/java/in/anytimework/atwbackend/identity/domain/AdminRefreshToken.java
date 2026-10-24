@@ -10,16 +10,21 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A long-lived refresh token (stored only as a SHA-256 hash). Rotated on every use and revocable,
- * so a stolen or logged-out token can be invalidated.
+ * A long-lived refresh token for an admin session (stored only as a SHA-256 hash). Rotated on
+ * every use and revocable, so a stolen or logged-out token can be invalidated.
  */
 @Getter
 @Entity
-@Table(name = "refresh_token")
-public class RefreshToken extends BaseEntity {
+@Table(name = "admin_refresh_token")
+public class AdminRefreshToken extends BaseEntity {
 
     @Column(name = "admin_user_id", nullable = false)
     private UUID adminUserId;
+
+    // Shared by every token descended from one original login (unchanged across rotations). Used
+    // for reuse detection: replaying an already-rotated-away token revokes the whole family.
+    @Column(name = "family_id", nullable = false)
+    private UUID familyId;
 
     @Column(name = "token_hash", nullable = false, length = 64, unique = true)
     private String tokenHash;
@@ -39,12 +44,14 @@ public class RefreshToken extends BaseEntity {
     @Column(name = "ip_address", length = 45)
     private String ipAddress;
 
-    protected RefreshToken() {
+    protected AdminRefreshToken() {
         // required by JPA
     }
 
-    public RefreshToken(UUID adminUserId, String tokenHash, Instant expiresAt, String ipAddress, String userAgent) {
+    public AdminRefreshToken(UUID adminUserId, UUID familyId, String tokenHash, Instant expiresAt,
+                             String ipAddress, String userAgent) {
         this.adminUserId = adminUserId;
+        this.familyId = familyId;
         this.tokenHash = tokenHash;
         this.expiresAt = expiresAt;
         this.ipAddress = ipAddress;

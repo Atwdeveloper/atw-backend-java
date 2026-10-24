@@ -9,12 +9,12 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
+public interface AdminAuthTokenRepository extends JpaRepository<AdminAuthToken, UUID> {
 
-    Optional<AuthToken> findByTokenHash(String tokenHash);
+    Optional<AdminAuthToken> findByTokenHash(String tokenHash);
 
     /** Marks every still-active token of {@code type} for this admin as used (scoped by type so this never touches the separate INVITE lifecycle). */
     @Modifying
-    @Query("update AuthToken t set t.usedAt = :now where t.adminUserId = :adminId and t.type = :type and t.usedAt is null and t.expiresAt > :now")
+    @Query("update AdminAuthToken t set t.usedAt = :now where t.adminUserId = :adminId and t.type = :type and t.usedAt is null and t.expiresAt > :now")
     int invalidateActiveTokens(@Param("adminId") UUID adminId, @Param("type") AuthTokenType type, @Param("now") Instant now);
 }

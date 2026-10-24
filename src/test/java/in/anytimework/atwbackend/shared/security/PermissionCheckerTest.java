@@ -27,13 +27,13 @@ class PermissionCheckerTest {
 
     @Test
     void grantsWhenExactPermissionPresent() {
-        authenticateWith("staff.view", "roles.view");
-        assertThat(checker.has("staff.view")).isTrue();
+        authenticateWith("admin_staff.view", "admin_roles.view");
+        assertThat(checker.has("admin_staff.view")).isTrue();
     }
 
     @Test
     void deniesWhenPermissionMissing() {
-        authenticateWith("staff.view");
+        authenticateWith("admin_staff.view");
         assertThat(checker.has("payroll.manage_deductions")).isFalse();
     }
 
@@ -46,6 +46,6 @@ class PermissionCheckerTest {
 
     @Test
     void deniesWhenUnauthenticated() {
-        assertThat(checker.has("staff.view")).isFalse();
+        assertThat(checker.has("admin_staff.view")).isFalse();
     }
 }
