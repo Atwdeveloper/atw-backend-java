@@ -17,6 +17,8 @@ public record AdminSecurityProperties(
         int otpMaxResends,
         int maxFailedLogins,
         Duration lockoutDuration,
-        Duration passwordResetTtl
+        Duration passwordResetTtl,
+        Duration inviteTtl,
+        boolean otpInResponse
 ) {
 }

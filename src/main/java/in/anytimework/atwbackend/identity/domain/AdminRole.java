@@ -14,13 +14,13 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * A named bundle of {@link Permission}s (the legacy "permission profile"). System roles are
+ * A named bundle of {@link AdminPermission}s (the legacy "permission profile"). System roles are
  * protected from edit/delete. Admins can hold multiple roles; effective abilities are the union.
  */
 @Getter
 @Entity
-@Table(name = "role")
-public class Role extends BaseEntity {
+@Table(name = "admin_role")
+public class AdminRole extends BaseEntity {
 
     @Column(nullable = false, length = 100, unique = true)
     private String name;
@@ -32,22 +32,33 @@ public class Role extends BaseEntity {
     private boolean systemRole;
 
     @ManyToMany(fetch = FetchType.LAZY)
-    @JoinTable(name = "role_permission",
+    @JoinTable(name = "admin_role_permission",
             joinColumns = @JoinColumn(name = "role_id"),
             inverseJoinColumns = @JoinColumn(name = "permission_id"))
-    private Set<Permission> permissions = new HashSet<>();
+    private Set<AdminPermission> permissions = new HashSet<>();
 
-    protected Role() {
+    protected AdminRole() {
         // required by JPA
     }
 
-    public Role(String name, String description, boolean systemRole) {
+    public AdminRole(String name, String description, boolean systemRole) {
         this.name = name;
         this.description = description;
         this.systemRole = systemRole;
     }
 
-    public void addPermission(Permission permission) {
+    public void addPermission(AdminPermission permission) {
         this.permissions.add(permission);
+    }
+
+    public void rename(String name, String description) {
+        this.name = name;
+        this.description = description;
+    }
+
+    /** Full replace: the role grants exactly {@code newPermissions} afterward, nothing more. */
+    public void replacePermissions(Set<AdminPermission> newPermissions) {
+        this.permissions.clear();
+        this.permissions.addAll(newPermissions);
     }
 }

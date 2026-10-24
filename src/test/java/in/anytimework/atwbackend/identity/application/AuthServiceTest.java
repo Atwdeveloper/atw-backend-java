@@ -2,9 +2,9 @@ package in.anytimework.atwbackend.identity.application;
 
 import in.anytimework.atwbackend.identity.application.dto.AuthTokens;
 import in.anytimework.atwbackend.identity.application.dto.LoginResult;
+import in.anytimework.atwbackend.identity.domain.AdminAuthTokenRepository;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
-import in.anytimework.atwbackend.identity.domain.AuthTokenRepository;
 import in.anytimework.atwbackend.notification.application.NotificationService;
 import in.anytimework.atwbackend.notification.application.SendEmailCommand;
 import in.anytimework.atwbackend.shared.exception.UnauthorizedException;
@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 class AuthServiceTest {
 
     private final AdminUserRepository adminUsers = mock(AdminUserRepository.class);
-    private final AuthTokenRepository authTokens = mock(AuthTokenRepository.class);
+    private final AdminAuthTokenRepository authTokens = mock(AdminAuthTokenRepository.class);
     private final OtpService otpService = mock(OtpService.class);
     private final RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
     private final AccessTokenService accessTokenService = mock(AccessTokenService.class);
@@ -44,7 +44,8 @@ class AuthServiceTest {
     private final NotificationService notificationService = mock(NotificationService.class);
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AdminSecurityProperties props = new AdminSecurityProperties(
-            true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 3, 5, Duration.ofMinutes(15), Duration.ofMinutes(30));
+            true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 3, 5, Duration.ofMinutes(15),
+            Duration.ofMinutes(30), Duration.ofDays(3), false);
     private final Clock clock = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
 
     private final AuthService authService = new AuthService(adminUsers, authTokens, otpService, refreshTokenService,
@@ -103,7 +104,7 @@ class AuthServiceTest {
         UUID challengeId = UUID.randomUUID();
         when(otpService.verifyAndConsume(challengeId, "123456")).thenReturn(adminId);
         when(adminUsers.findById(adminId)).thenReturn(Optional.of(admin));
-        when(adminUsers.findPermissionCodes(any())).thenReturn(List.of("staff.view", "roles.view"));
+        when(adminUsers.findPermissionCodes(any())).thenReturn(List.of("admin_staff.view", "admin_roles.view"));
         when(adminUsers.findRoleNames(any())).thenReturn(List.of("Sub Admin"));
         when(refreshTokenService.issue(any(), any(), any()))
                 .thenReturn(new RefreshTokenService.IssuedRefresh("refresh-token", Instant.EPOCH, UUID.randomUUID()));
@@ -115,7 +116,7 @@ class AuthServiceTest {
         assertThat(tokens.accessToken()).isEqualTo("access-jwt");
         assertThat(tokens.refreshToken()).isEqualTo("refresh-token");
         assertThat(tokens.tokenType()).isEqualTo("Bearer");
-        assertThat(tokens.admin().authorities()).contains("staff.view", "roles.view");
+        assertThat(tokens.admin().authorities()).contains("admin_staff.view", "admin_roles.view");
         verify(audit).record(any(), eq("LOGIN_SUCCESS"), anyString(), any(), any());
     }
 }

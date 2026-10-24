@@ -12,13 +12,13 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A single-use link token for password reset (and, later, invite onboarding). Stored as a SHA-256
- * hash; usable once before expiry.
+ * A single-use link token for an admin: password reset or staff invite (see {@link AuthTokenType}).
+ * Stored as a SHA-256 hash; usable once before expiry.
  */
 @Getter
 @Entity
-@Table(name = "auth_token")
-public class AuthToken extends BaseEntity {
+@Table(name = "admin_auth_token")
+public class AdminAuthToken extends BaseEntity {
 
     @Column(name = "admin_user_id", nullable = false)
     private UUID adminUserId;
@@ -36,11 +36,11 @@ public class AuthToken extends BaseEntity {
     @Column(name = "used_at")
     private Instant usedAt;
 
-    protected AuthToken() {
+    protected AdminAuthToken() {
         // required by JPA
     }
 
-    public AuthToken(UUID adminUserId, String tokenHash, AuthTokenType type, Instant expiresAt) {
+    public AdminAuthToken(UUID adminUserId, String tokenHash, AuthTokenType type, Instant expiresAt) {
         this.adminUserId = adminUserId;
         this.tokenHash = tokenHash;
         this.type = type;

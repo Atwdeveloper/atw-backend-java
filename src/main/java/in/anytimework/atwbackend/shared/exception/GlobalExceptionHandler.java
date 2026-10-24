@@ -7,6 +7,7 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -18,6 +19,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Clock;
@@ -81,11 +83,31 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "Request body is missing or malformed", null);
     }
 
+    /** A path/query value that doesn't fit its target type (e.g. "/staff/not-a-uuid") -> 400, not 500. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
+                "Invalid value for parameter '" + ex.getName() + "'", null);
+    }
+
     /** Wrong Content-Type on the request body (e.g. text/plain instead of application/json) -> 415. */
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex) {
         return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE",
                 "Content-Type must be application/json", null);
+    }
+
+    /**
+     * A unique-constraint violation that reached the database despite an earlier application-level
+     * check (e.g. two concurrent requests both pass an {@code existsByEmail} check before either
+     * commits) -> 409, not the generic 500 this would otherwise fall through to. A safety net, not a
+     * fix for the race itself - the losing request still loses, it just fails cleanly.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        log.warn("Data integrity violation (likely a duplicate/concurrent write): {}", ex.getMessage());
+        return build(HttpStatus.CONFLICT, "CONFLICT",
+                "This conflicts with an existing record (e.g. a duplicate email, username, or name)", null);
     }
 
     /** No controller mapping matches the URL (typo'd path or unknown endpoint) -> 404. */

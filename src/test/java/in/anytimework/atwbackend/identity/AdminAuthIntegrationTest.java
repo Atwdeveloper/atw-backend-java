@@ -7,10 +7,9 @@ import in.anytimework.atwbackend.identity.domain.AdminOtp;
 import in.anytimework.atwbackend.identity.domain.AdminOtpRepository;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
-import in.anytimework.atwbackend.identity.domain.Role;
-import in.anytimework.atwbackend.identity.domain.RoleRepository;
-import in.anytimework.atwbackend.notification.application.EmailMessage;
-import in.anytimework.atwbackend.notification.application.EmailSender;
+import in.anytimework.atwbackend.identity.domain.AdminRole;
+import in.anytimework.atwbackend.identity.domain.AdminRoleRepository;
+import in.anytimework.atwbackend.notification.CapturingEmailSender;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.UnauthorizedException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
@@ -26,9 +25,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -60,7 +57,7 @@ class AdminAuthIntegrationTest {
     @Autowired
     private AdminOtpRepository adminOtps;
     @Autowired
-    private RoleRepository roles;
+    private AdminRoleRepository roles;
     @Autowired
     private PasswordEncoder passwordEncoder;
     @Autowired
@@ -70,7 +67,7 @@ class AdminAuthIntegrationTest {
 
     private AdminUser createAdmin(String password, String roleName) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
-        Role role = roles.findByName(roleName).orElseThrow();
+        AdminRole role = roles.findByName(roleName).orElseThrow();
         AdminUser admin = new AdminUser("it-" + suffix, "it-" + suffix + "@example.com",
                 passwordEncoder.encode(password), "IT Admin " + suffix, null, false, false);
         admin.assignRole(role);
@@ -114,7 +111,7 @@ class AdminAuthIntegrationTest {
         Jwt jwt = jwtDecoder.decode(tokens.accessToken());
         assertThat(jwt.getSubject()).isEqualTo(admin.getId().toString());
         assertThat(jwt.getClaimAsBoolean("super_admin")).isFalse();
-        assertThat(jwt.getClaimAsStringList("authorities")).contains("staff.view", "roles.view");
+        assertThat(jwt.getClaimAsStringList("authorities")).contains("admin_staff.view", "admin_roles.view");
 
         // 4) refresh rotates: a new token works, the old refresh token is now rejected
         AuthTokens refreshed = authService.refresh(tokens.refreshToken(), "127.0.0.1", "JUnit");
@@ -125,6 +122,24 @@ class AdminAuthIntegrationTest {
         // 5) logout revokes the current refresh token
         authService.logout(refreshed.refreshToken(), "127.0.0.1", "JUnit");
         assertThatThrownBy(() -> authService.refresh(refreshed.refreshToken(), "127.0.0.1", "JUnit"))
+                .isInstanceOf(UnauthorizedException.class);
+    }
+
+    @Test
+    void replayingAnAlreadyRotatedRefreshToken_revokesTheWholeSessionFamily() {
+        AdminUser admin = createAdmin("Secret@12345", "Sub Admin");
+        LoginResult login = authService.login(admin.getEmail(), "Secret@12345", "127.0.0.1", "JUnit");
+        String otp = extractOtp(emailSender.last().htmlBody());
+        AuthTokens original = authService.verifyOtp(login.challengeId(), otp, "127.0.0.1", "JUnit");
+
+        // original.refreshToken() rotates to "current" - the live end of the family.
+        AuthTokens current = authService.refresh(original.refreshToken(), "127.0.0.1", "JUnit");
+
+        // Replaying the dead, already-rotated-away original token is treated as theft: it doesn't
+        // just fail for itself, it kills the live descendant too, forcing a fresh login either way.
+        assertThatThrownBy(() -> authService.refresh(original.refreshToken(), "127.0.0.1", "JUnit"))
+                .isInstanceOf(UnauthorizedException.class);
+        assertThatThrownBy(() -> authService.refresh(current.refreshToken(), "127.0.0.1", "JUnit"))
                 .isInstanceOf(UnauthorizedException.class);
     }
 
@@ -169,7 +184,7 @@ class AdminAuthIntegrationTest {
         LoginResult login = authService.login(admin.getEmail(), "Secret@12345", "127.0.0.1", "JUnit");
         UUID originalChallengeId = login.challengeId();
 
-        UUID newChallengeId = authService.resendOtp(originalChallengeId, "127.0.0.1", "JUnit");
+        UUID newChallengeId = authService.resendOtp(originalChallengeId, "127.0.0.1", "JUnit").challengeId();
         assertThat(newChallengeId).isNotEqualTo(originalChallengeId);
         String newOtp = extractOtp(emailSender.last().htmlBody());
 
@@ -221,28 +236,13 @@ class AdminAuthIntegrationTest {
         // otpMaxResends is 3 (application.properties default): 3 resends in a chain succeed...
         UUID challengeId = login.challengeId();
         for (int resend = 1; resend <= 3; resend++) {
-            challengeId = authService.resendOtp(challengeId, "127.0.0.1", "JUnit");
+            challengeId = authService.resendOtp(challengeId, "127.0.0.1", "JUnit").challengeId();
         }
 
         // ...but the next one in the same chain is one too many.
         UUID lastChallengeId = challengeId;
         assertThatThrownBy(() -> authService.resendOtp(lastChallengeId, "127.0.0.1", "JUnit"))
                 .isInstanceOf(BusinessRuleException.class);
-    }
-
-    /** Captures outgoing emails so the test can read the OTP; overrides the dev log sender. */
-    static class CapturingEmailSender implements EmailSender {
-        private final List<EmailMessage> sent = new CopyOnWriteArrayList<>();
-
-        @Override
-        public String send(EmailMessage message) {
-            sent.add(message);
-            return "test-" + message.to();
-        }
-
-        EmailMessage last() {
-            return sent.get(sent.size() - 1);
-        }
     }
 
     @TestConfiguration

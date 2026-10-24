@@ -1,31 +1,51 @@
 {
   "info": {
     "name": "ATW Backend - Admin API",
-    "description": "Admin authentication, account self-service, and permission-catalog endpoints for the Anytime Work backend. Every response is wrapped in the standard envelope: {\"success\": boolean, \"data\": <payload|null>, \"error\": <ApiError|null>}. See FRONTEND_HANDOVER.md in the repo for the full error-code reference and the auth flow explanation.\n\nRequests that save tokens use a Tests script to populate the environment's accessToken/refreshToken/challengeId variables automatically — run them in order (Login -> Verify OTP -> ...) with the ATW Backend - Local environment selected.",
+    "description": "# ATW Backend — Admin API\n\nAdmin authentication, account self-service, permission catalog, and staff/role administration for the Anytime Work backend. This is the **admin side only** — ATW's own internal platform staff/employees (e.g. `AdminStaffController`, roles like \"Senior Developer\"). Worker-side and company-side auth are separate, not-yet-built modules and are out of scope for this collection.\n\nEvery endpoint is versioned under `/api/v1/` and returns the same envelope:\n\n```\n{ \"success\": boolean, \"data\": <payload> | null, \"error\": <ApiError> | null }\n```\n\n`ApiError` shape: `{\"code\": string, \"message\": string, \"fieldErrors\": [{\"field\",\"message\"}] | null, \"timestamp\": ISO-8601 string, \"traceId\": string | null}`. `fieldErrors` is populated only for `VALIDATION_ERROR` responses that came from `@Valid` request-body validation; it's `null`/omitted for every other error, including other `VALIDATION_ERROR` responses raised programmatically (e.g. \"Unknown permission code(s)\"). `traceId` echoes the `X-Correlation-Id` request header when present — include it when reporting a bug.\n\n## Running this collection\n\nSelect the **ATW Backend - Local** environment first. Requests are grouped Auth → Account → Admin → Roles → Staff → Health, roughly the order you'd run them in:\n\n1. **Auth > Login**, then **Auth > Verify OTP** (skip if `otpRequired` was `false`) — saves `{{accessToken}}` / `{{refreshToken}}`.\n2. Locally, `atw.admin.security.otp-in-response=true` (see `application-local.properties`) puts the plaintext code straight into the response as `testOtp`; this collection's Tests scripts save it to `{{testOtp}}`, which Verify OTP's body already references — so steps 1-2 work with zero manual copy-pasting on a local run. This flag is hard-refused at startup outside local/test (`StartupSecurityValidator`); anywhere else, read the OTP from the real email or server log (`MAIL_PROVIDER=log`) and paste it in by hand.\n3. **Roles > Create Role** and **Staff > Create Staff** save `{{roleId}}` / `{{staffId}}` for the requests below them.\n4. `{{resetToken}}` (Forgot/Reset Password) and `{{inviteToken}}` (Create Staff → Accept Invite) are **not** auto-populated — they only ever reach an inbox or the server log, by design, so copy them in manually from there.\n\n## Error codes that can appear on (almost) any endpoint\n\nThese are produced centrally — by `GlobalExceptionHandler`, by Spring Security's entry point / access-denied handler, or by the two security filters that run before a controller is even reached — so they are **not** re-documented on every individual request below; only an endpoint's *specific* codes and triggers are. Two pairs are easy to confuse and worth reading carefully:\n\n| Code | HTTP | Meaning |\n|---|---|---|\n| `VALIDATION_ERROR` | 400 | A `@Valid` request-body field failed Bean Validation (`fieldErrors[]` present), or a service-level input check failed (no `fieldErrors`). |\n| `MALFORMED_REQUEST` | 400 | Request body is missing or isn't valid JSON. |\n| `UNSUPPORTED_MEDIA_TYPE` | 415 | `Content-Type` isn't `application/json`. |\n| `UNAUTHENTICATED` | 401 | **No bearer token was presented at all**, or it's malformed/expired/signature-invalid. Produced by Spring Security itself, before any controller runs. |\n| `UNAUTHORIZED` | 401 | A **business-level** auth failure on an endpoint that doesn't require a token in the first place — bad login credentials, a locked/disabled account, an invalid refresh/reset/invite token. Same HTTP status as `UNAUTHENTICATED` above, different meaning: this means \"the token/credential you supplied is bad\", not \"you supplied nothing\". |\n| `SESSION_REVOKED` | 401 | The bearer token parses fine, but the admin's `security_version` has moved on since it was issued (password changed/reset, or their role assignment changed), or the account is no longer `ACTIVE`. The client must discard tokens and log in again — refreshing won't help, the refresh token was revoked too. |\n| `MUST_CHANGE_PASSWORD` | 403 | Authenticated, but the token's `mustChangePassword` flag is set and this isn't `/admin/account/me` or `/admin/account/change-password`. |\n| `ACCESS_DENIED` | 403 | Authenticated, but lacking the specific permission the endpoint requires. |\n| `RATE_LIMITED` | 429 | Too many requests to one of the 6 public, abuse-prone auth endpoints from the same IP within the window — default 10 requests/60s, **per endpoint**, not pooled across them. |\n| `NOT_FOUND` | 404 | The **URL itself** doesn't match any endpoint (a routing miss — typo'd path, wrong version prefix, etc). |\n| `RESOURCE_NOT_FOUND` | 404 | The URL is valid, but the specific id in it (a staff id, role id, ...) doesn't exist. Different from `NOT_FOUND` above — don't conflate \"no such route\" with \"no such record\". |\n| `METHOD_NOT_ALLOWED` | 405 | Right URL, wrong HTTP verb. |\n| `BUSINESS_RULE_VIOLATION` | 422 | Input is syntactically well-formed but violates a business rule (e.g. \"system roles cannot be modified\", a privilege-escalation attempt, self/super-admin protection). |\n| `CONFLICT` | 409 | Either an endpoint's own duplicate check (most common — a friendlier, specific message), or a generic last-resort safety net when a unique-constraint violation reaches the database despite an earlier application-level check passing (a genuine race between two concurrent requests) — that fallback case always carries the same generic message, regardless of which field collided. |\n| `INTERNAL_ERROR` | 500 | Unexpected failure. Full detail (stack trace) is logged server-side against the same `traceId` returned to the client; never returned in the response body itself. |\n\n## Documentation cross-references\n\n- `docs/admin-auth-api.md` — narrative walkthrough of the auth flow.\n- `FRONTEND_HANDOVER.md` / `HANDOVER.md` — broader project handover context, including what's explicitly **out of scope** today (worker/company auth, an audit-log read API, session/device listing, a resend-invite endpoint).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
     "type": "noauth"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
   ],
   "item": [
     {
       "name": "Auth",
-      "description": "Public endpoints under /api/admin/auth/** - no bearer token required.",
+      "description": "Public endpoints under `/api/v1/admin/auth/**` — **no bearer token required, and none should be sent** (these paths are explicitly listed in `SecurityConfig.PUBLIC_PATHS` and are also exempted from the must-change-password gate in `AdminSessionPolicyFilter`).\n\nAll of these except **Refresh** and **Logout** are rate-limited at 10 requests/60s per IP, per endpoint (see the collection-level error table for `RATE_LIMITED`) — Refresh is excluded because it's routine traffic, not abuse-prone; Logout is excluded because there's nothing to abuse (it always succeeds).\n\nRun order for a full login: **Login → Verify OTP** (skip Verify OTP if `otpRequired` came back `false`). **Resend OTP** is an alternative branch off Login, not part of the main sequence.",
       "item": [
         {
           "name": "Login (step 1 - password)",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "login"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "**Permission:** none (public). **Rate limited:** yes, own 10 req/60s-per-IP bucket.\n\nStep 1 of login: verifies the password only. `usernameOrEmail` is matched case-insensitively against either the username or the email (`findByUsernameIgnoreCaseOrEmailIgnoreCase`).\n\n**Validation**\n- `usernameOrEmail` — required, non-blank.\n- `password` — required, non-blank.\n\n**Behavior / errors** (checked in this order; the first match wins)\n\n| Condition | Code | HTTP | Audit action |\n|---|---|---|---|\n| No admin matches the identifier | `UNAUTHORIZED` | 401 | `LOGIN_FAILED` |\n| Account is currently locked (see below) | `UNAUTHORIZED` | 401 | `LOGIN_BLOCKED` |\n| Account `status = DISABLED` | `UNAUTHORIZED` | 401 | `LOGIN_BLOCKED` |\n| Password doesn't match | `UNAUTHORIZED` | 401 | `LOGIN_FAILED` |\n\nNote: the locked/disabled messages (\"Account is temporarily locked...\", \"Account is disabled.\") are intentionally more specific than the generic \"Invalid credentials\" used for the other two rows — a caller who knows a valid identifier can distinguish \"wrong password\" from \"this account is locked/disabled\". This is a deliberate, pre-existing trade-off (better operational feedback vs. a small account-existence signal), not an oversight — contrast with Forgot Password below, which *is* designed to reveal nothing.\n\n**Lockout policy:** 5 wrong passwords in a row (default `ADMIN_MAX_FAILED_LOGINS`) locks the account for 15 minutes (default `ADMIN_LOCKOUT_DURATION`). Any successful password check resets the counter to 0, including one that's followed by this account later failing OTP — the counter is purely about the password step.\n\n**On success:**\n- If `atw.admin.security.otp-enabled` (default **true**): issues an OTP (see Verify OTP), emails it (template `ADMIN_LOGIN_OTP`), audits `LOGIN_OTP_SENT`, and responds `{otpRequired: true, challengeId, testOtp}` — call **Verify OTP** next.\n- If OTP is disabled: logs the admin in immediately, audits `LOGIN_SUCCESS`, and responds `{otpRequired: false, tokens: {...}}` where `tokens` has the exact same shape as Verify OTP's response body (`AuthTokens`).\n\n`testOtp` is only ever present when `atw.admin.security.otp-in-response=true` — true in `application-local.properties`, hard-refused at startup in any non-local/test profile (`StartupSecurityValidator`). This collection's Tests script saves it to `{{testOtp}}`, which the Verify OTP request body already references.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"usernameOrEmail\": \"{{adminUsernameOrEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
-            },
-            "description": "Verifies the password. If OTP is enabled (the default), returns {otpRequired: true, challengeId}; the OTP is emailed (or, with MAIL_PROVIDER=log, printed to the server log) - copy it into the Verify OTP request below. If OTP is disabled, returns {otpRequired: false, tokens} directly - same shape as Verify OTP's response."
+            }
           },
           "event": [
             {
@@ -33,11 +53,19 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
                   "const res = pm.response.json();",
                   "if (res.success && res.data) {",
                   "  if (res.data.otpRequired) {",
                   "    pm.environment.set('challengeId', res.data.challengeId);",
-                  "    console.log('OTP required - challengeId saved. Check the server log (or your inbox) for the code, then run Verify OTP.');",
+                  "    if (res.data.testOtp) { pm.environment.set('testOtp', res.data.testOtp); }",
+                  "    console.log('OTP required - challengeId (and testOtp, if present) saved. Run Verify OTP next.');",
                   "  } else if (res.data.tokens) {",
                   "    pm.environment.set('accessToken', res.data.tokens.accessToken);",
                   "    pm.environment.set('refreshToken', res.data.tokens.refreshToken);",
@@ -47,19 +75,116 @@
                 ]
               }
             }
+          ],
+          "response": [
+            {
+              "name": "200 - OTP required (default)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "auth",
+                    "login"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"usernameOrEmail\": \"{{adminUsernameOrEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"otpRequired\": true,\n    \"challengeId\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"tokens\": null,\n    \"testOtp\": \"482913\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "401 - Invalid credentials",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "auth",
+                    "login"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"usernameOrEmail\": \"{{adminUsernameOrEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"UNAUTHORIZED\",\n    \"message\": \"Invalid credentials\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:15:30Z\",\n    \"traceId\": \"9f1c2e3a4b5d6e7f\"\n  }\n}"
+            }
           ]
         },
         {
           "name": "Verify OTP (step 2 - 2FA)",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/auth/verify-otp", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "verify-otp"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/verify-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "verify-otp"
+              ]
+            },
+            "description": "**Permission:** none (public). **Rate limited:** yes, own 10 req/60s-per-IP bucket.\n\nStep 2: submits the code for the `challengeId` from Login/Resend OTP.\n\n**Validation**\n- `challengeId` — required, must be a UUID.\n- `otp` — required, non-blank (compared as a string; leading zeros matter).\n\n**Behavior / errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| `challengeId` doesn't exist, OR the challenge is already consumed, OR it's past `otpTtl` (default 10 min) | `VALIDATION_ERROR` | 400 |\n| The challenge already has `otpMaxAttempts` (default 5) recorded wrong guesses | `BUSINESS_RULE_VIOLATION` | 422 — \"Too many invalid attempts. Please request a new code.\" |\n| Wrong code | `VALIDATION_ERROR` | 400 — and the attempt counter above is incremented, **even on this failing response** (it's persisted before the exception is thrown) |\n| Code is correct, but the admin's account was disabled between Login step 1 and now | `UNAUTHORIZED` | 401 — \"Account is disabled.\" |\n\nOnce `otpMaxAttempts` is hit, that challenge is permanently dead — submitting the *correct* code no longer works either. Get a new one via **Resend OTP**, or start over at **Login**.\n\n**On success:** consumes the challenge, clears the account's failed-login counter, records `lastLoginAt`, audits `LOGIN_SUCCESS`, and returns the full `AuthTokens` payload directly (not wrapped in another object, unlike Login's response) — `{accessToken, tokenType: \"Bearer\", expiresIn, refreshToken, admin: {...}}`. Check `admin.mustChangePassword`: if true, the frontend should route straight to a change-password screen, since every endpoint except `/account/me` and `/account/change-password` will reject with `MUST_CHANGE_PASSWORD` until it's cleared.\n\n**Concurrency:** safe under truly concurrent verify attempts against the same challenge (e.g. a double-submit) — each concurrent guess is still recorded as its own attempt via optimistic-lock retry, so the attempt counter can't be bypassed by racing requests.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"challengeId\": \"{{challengeId}}\",\n  \"otp\": \"123456\"\n}"
-            },
-            "description": "Submits the 6-digit code for the challenge from Login. On success returns the full AuthTokens payload (accessToken, refreshToken, admin profile). Wrong code: 400 VALIDATION_ERROR. 6th wrong attempt in a row: 422 BUSINESS_RULE_VIOLATION (\"Too many invalid attempts\") even if you then submit the right code - request a new OTP via Resend or Login again."
+              "raw": "{\n  \"challengeId\": \"{{challengeId}}\",\n  \"otp\": \"{{testOtp}}\"\n}"
+            }
           },
           "event": [
             {
@@ -67,14 +192,101 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
                   "const res = pm.response.json();",
                   "if (res.success && res.data) {",
                   "  pm.environment.set('accessToken', res.data.accessToken);",
                   "  pm.environment.set('refreshToken', res.data.refreshToken);",
-                  "  console.log('Tokens saved. admin.mustChangePassword =', res.data.admin.mustChangePassword);",
-                  "}"
+                  "}",
+                  "console.log('mustChangePassword =', pm.response.json().data.admin.mustChangePassword);"
                 ]
               }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Authenticated",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/auth/verify-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "auth",
+                    "verify-otp"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"challengeId\": \"{{challengeId}}\",\n  \"otp\": \"{{testOtp}}\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accessToken\": \"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI5ZDJm...\",\n    \"tokenType\": \"Bearer\",\n    \"expiresIn\": 900,\n    \"refreshToken\": \"7f3a9c2e8b1d4f6a0c5e9b2d7a1f4c8e6b3d0a9f2c5e8b1d4f7a0c3e6b9d2f5a\",\n    \"admin\": {\n      \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n      \"username\": \"superadmin\",\n      \"email\": \"superadmin@anytimework.in\",\n      \"fullName\": \"Platform Super Admin\",\n      \"superAdmin\": true,\n      \"roles\": [],\n      \"authorities\": [\n        \"SUPER_ADMIN\"\n      ],\n      \"mustChangePassword\": false\n    }\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Too many invalid attempts",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/auth/verify-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "auth",
+                    "verify-otp"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"challengeId\": \"{{challengeId}}\",\n  \"otp\": \"{{testOtp}}\"\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Too many invalid attempts. Please request a new code.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:16:05Z\",\n    \"traceId\": \"9f1c2e3a4b5d6e80\"\n  }\n}"
             }
           ]
         },
@@ -82,13 +294,30 @@
           "name": "Resend OTP",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/auth/resend-otp", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "resend-otp"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/resend-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "resend-otp"
+              ]
+            },
+            "description": "**Permission:** none (public). **Rate limited:** yes, own 10 req/60s-per-IP bucket (independent of the resend-specific cap below).\n\nIssues a fresh code for the same login attempt and **immediately invalidates** the previous challenge — the old `challengeId` stops working for Verify OTP the moment this succeeds, whether or not it had any attempts left.\n\n**Validation**\n- `challengeId` — required, must be a UUID.\n\n**Behavior / errors**\n\n| Condition | Code | HTTP | Message |\n|---|---|---|---|\n| `challengeId` doesn't exist at all | `VALIDATION_ERROR` | 400 | \"Invalid verification request\" |\n| It exists but is already consumed or expired | `VALIDATION_ERROR` | 400 | \"Invalid or expired verification code\" |\n| Less than `otpResendInterval` (default 60s) has passed since the previous code was issued | `BUSINESS_RULE_VIOLATION` | 422 | \"Please wait before requesting another code.\" |\n| This chain has already been resent `otpMaxResends` (default 3) times | `BUSINESS_RULE_VIOLATION` | 422 | \"Too many resend attempts. Please start over by logging in again.\" |\n| A concurrent resend/verify of the same challenge wins the race | `VALIDATION_ERROR` | 400 | \"Invalid or expired verification code\" (fails cleanly, not a 500) |\n\n**On success:** returns `{challengeId, testOtp}` with a **new** challenge id and a fresh `otpTtl`. The resend count carries over onto the new challenge (so the cap tracks the whole chain, not just one challenge), audits `LOGIN_OTP_RESENT`, and re-sends the OTP email. This request's Tests script overwrites `{{challengeId}}` (and `{{testOtp}}`, if present) with the new values.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"challengeId\": \"{{challengeId}}\"\n}"
-            },
-            "description": "Issues a fresh code and INVALIDATES the previous one (the old challengeId stops working the moment this succeeds). Returns a new challengeId - this request's Tests script overwrites the saved one. Subject to a cooldown (default 60s) and a cap on total resends per login attempt (default 3) - both return 422 BUSINESS_RULE_VIOLATION."
+            }
           },
           "event": [
             {
@@ -96,8 +325,16 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
                   "const res = pm.response.json();",
                   "if (res.success && res.data) {",
+                  "  if (res.data.testOtp) { pm.environment.set('testOtp', res.data.testOtp); }",
                   "  pm.environment.set('challengeId', res.data.challengeId);",
                   "}"
                 ]
@@ -109,13 +346,30 @@
           "name": "Refresh Token",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "refresh"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "**Permission:** none (public, but requires a valid refresh token). **Rate limited: no** — deliberately excluded from the 6 rate-limited endpoints (`AdminAuthPaths.RATE_LIMITED`); refresh is routine traffic (called every time the 15-minute access token expires), not abuse-prone the way login/OTP/password-reset are.\n\nExchanges a valid refresh token for a brand-new access+refresh pair, **rotating** the refresh token: the old one is revoked and linked to the new one, so it cannot be used again under any circumstance.\n\n**Validation**\n- `refreshToken` — required, non-blank (the opaque token string from a prior auth response, not a JWT).\n\n**Behavior / errors**\n\n| Condition | Code | HTTP | Message |\n|---|---|---|---|\n| Token not found, or expired, or already revoked for an ordinary reason (explicit logout, account disabled, password change/reset) | `UNAUTHORIZED` | 401 | \"Refresh token has expired or been revoked\" |\n| Token was revoked specifically **because it was already rotated away**, and is now being presented again (reuse/replay) | `UNAUTHORIZED` | 401 | \"This session was revoked for your safety. Please log in again.\" |\n| Token is valid, but the admin's account is now `DISABLED` | `UNAUTHORIZED` | 401 | \"Account is disabled.\" (this also revokes the token being presented) |\n\n**Reuse detection (RFC 6819 §5.2.2.3):** every refresh token belongs to a rotation \"family\" starting at login. Replaying an already-rotated token is a strong signal of theft (an attacker and the legitimate user both holding a copy, one of them having already used it to rotate forward) — detecting this **revokes the entire family**, not just the presented token, cutting off whichever side currently holds the live descendant and forcing a fresh login for both. Audited as `REFRESH_TOKEN_REUSE_DETECTED`.\n\n**On success:** audits `TOKEN_REFRESHED`, returns a fresh `AuthTokens` (same shape as Verify OTP's response). This request's Tests script overwrites both `{{accessToken}}` and `{{refreshToken}}`.\n\n**Concurrency:** safe against a concurrent password reset/change — both paths take the same per-admin row lock before revoking tokens / bumping the security version, so whichever commits first is what the other observes (no window where a reset \"loses\" to an in-flight refresh).",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
-            },
-            "description": "Exchanges a valid refresh token for a new access+refresh pair, revoking the old refresh token (rotation - it cannot be reused after this). Call this when a protected request gets a 401 UNAUTHENTICATED because the access token (15 min default lifetime) expired. If the refresh token itself is expired/revoked, this also 401s - the user must log in again."
+            }
           },
           "event": [
             {
@@ -123,6 +377,13 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
                   "const res = pm.response.json();",
                   "if (res.success && res.data) {",
                   "  pm.environment.set('accessToken', res.data.accessToken);",
@@ -137,111 +398,1558 @@
           "name": "Logout",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/auth/logout", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "logout"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "**Permission:** none (public). **Rate limited: no** — not abuse-prone, deliberately excluded.\n\nRevokes the given refresh token.\n\n**Validation**\n- `refreshToken` — required, non-blank.\n\n**Behavior:** always returns `200 success` — there is no error path visible to the client. An unknown or already-revoked token is treated identically to a freshly-valid one (idempotent); only audits `LOGOUT` when the token was actually found.\n\n**Known, deliberate limitation:** this does **not** invalidate the access token the caller was using. JWT access tokens are stateless and not tracked server-side, so they simply remain technically valid until they naturally expire (≤ 15 minutes, `JWT_ACCESS_TTL`). The frontend must also discard the access token client-side immediately on logout — don't rely on the server to reject it. (This was an explicit, accepted trade-off, not an oversight — revoking individual access tokens would require a server-side denylist with its own cost/complexity, and the exposure window is bounded to the access-token TTL.)",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
-            },
-            "description": "Revokes the given refresh token. Always returns success (idempotent) even if the token was already invalid. The frontend should also discard the access token client-side immediately - it stays technically valid until it naturally expires (max 15 min)."
-          }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Forgot Password",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "forgot-password"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "description": "**Permission:** none (public). **Rate limited:** yes, own 10 req/60s-per-IP bucket.\n\n**Validation**\n- `email` — required, must be a syntactically valid email address (format only — existence is deliberately not checked, see below).\n\n**Behavior:** **always** returns `200 success`, whether or not the email belongs to an admin — this is a deliberate anti-enumeration design, unlike Login (see its notes above). Do not treat this response as confirmation the email exists, and don't surface a different UI state based on it.\n\nIf the email *does* match an admin: generates an opaque token, stores only its SHA-256 hash (type `PASSWORD_RESET`, TTL `atw.admin.security.password-reset-ttl`, default 30 min), emails a reset link (`{frontendBaseUrl}/admin/reset-password?token=...`), and audits `PASSWORD_RESET_REQUESTED`.\n\n**Note:** calling this multiple times for the same admin creates multiple simultaneously-valid reset tokens — an earlier unused link is *not* invalidated just by requesting a new one. All of them (plus any pending login OTP) only get invalidated together once one is actually *used* via Reset Password, or the password is changed via Change Password.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"{{adminUsernameOrEmail}}\"\n}"
-            },
-            "description": "Always returns success, whether or not the email belongs to an admin (prevents account enumeration - do not treat this response as confirmation the email exists). If it does, a reset link is emailed (or logged, with MAIL_PROVIDER=log) as {{atw.frontend.base-url}}/admin/reset-password?token=<token> - the frontend route should read that token param and POST it to Reset Password below."
-          }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Reset Password",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["api", "admin", "auth", "reset-password"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "**Permission:** none (public). **Rate limited:** yes, own 10 req/60s-per-IP bucket.\n\nSets a new password from the token in a Forgot Password reset link. `{{resetToken}}` isn't auto-populated by this collection (it only ever reaches the admin's inbox, or the server log with `MAIL_PROVIDER=log`) — copy it from the `token=` query param of the emailed/logged link and set it manually.\n\n**Validation**\n- `token` — required, non-blank.\n- `newPassword` — required, 8-100 characters.\n\n**Behavior / errors** — all four of the following collapse to the *same* generic message, by design (so a client can't use the error to probe whether a given token value was ever issued, merely expired, or already used):\n\n| Condition | Code | HTTP | Message |\n|---|---|---|---|\n| Token hash not found | `VALIDATION_ERROR` | 400 | \"Invalid or expired reset link\" |\n| Token exists but isn't type `PASSWORD_RESET` (e.g. it's actually an invite token) | `VALIDATION_ERROR` | 400 | \"Invalid or expired reset link\" |\n| Token already used, or past its TTL | `VALIDATION_ERROR` | 400 | \"Invalid or expired reset link\" |\n| `newPassword` outside 8-100 chars | `VALIDATION_ERROR` | 400 | Bean Validation message, with `fieldErrors` |\n\n**On success:** sets the new password, bumps `security_version` (every access token issued before this moment stops working immediately, regardless of its remaining TTL), **revokes every refresh token** for that admin (logs out all devices), marks this reset token used, invalidates every *other* outstanding `PASSWORD_RESET` token and every pending login OTP for that admin, emails an \"your password was changed\" notification, and audits `PASSWORD_RESET`.\n\n**Concurrency:** the admin row is locked before the token is re-checked, specifically to close a race where a sibling reset token (from a second Forgot Password call) is used concurrently — whichever request gets the lock first is the one whose effects \"win\".",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"newPassword\": \"NewStrongPassword@123\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Accept Invite",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/auth/accept-invite",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "auth",
+                "accept-invite"
+              ]
             },
-            "description": "Sets a new password from a reset-link token (30 min TTL by default). On success this ALSO: revokes every refresh token and access-token session for that admin, invalidates every other outstanding reset link and pending login-OTP for that admin, and sends a \"your password was changed\" email. newPassword must be 8-100 characters."
-          }
+            "description": "**Permission:** none (public). **Rate limited:** yes, own 10 req/60s-per-IP bucket.\n\nCompletes a staff invite issued by **Staff > Create Staff**: sets that brand-new account's *first* real password (it was created with a random, never-disclosed one, so it cannot be used to log in until this runs). `{{inviteToken}}` comes from the `token=` query param of the invite email (or server log, with `MAIL_PROVIDER=log`) — paste it in manually, same as `{{resetToken}}`.\n\n**Validation**\n- `token` — required, non-blank.\n- `password` — required, 8-100 characters.\n\n**Behavior / errors** — same collapsed-generic-message pattern as Reset Password, for the same reason:\n\n| Condition | Code | HTTP | Message |\n|---|---|---|---|\n| Token hash not found | `VALIDATION_ERROR` | 400 | \"Invalid or expired invite link\" |\n| Token exists but isn't type `INVITE` | `VALIDATION_ERROR` | 400 | \"Invalid or expired invite link\" |\n| Token already used, or past `atw.admin.security.invite-ttl` (default 3 days) | `VALIDATION_ERROR` | 400 | \"Invalid or expired invite link\" |\n\n**On success:** sets the password (which also clears `mustChangePassword` — the new staff member can log in immediately afterward with no forced-change step), bumps `security_version`, marks the invite token used, invalidates every *other* outstanding `INVITE` token for that admin, and audits `STAFF_INVITE_ACCEPTED`.\n\n**Deliberately different from Reset Password:** does **not** revoke refresh tokens (there are none yet — the account has never logged in) and does **not** send a \"password changed\" email (there's no prior password to notify about). Kept as a fully separate code path precisely so it can skip those steps without touching Reset Password's already-reasoned-through locking behavior, and so the audit trail accurately reflects which event actually happened.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{inviteToken}}\",\n  \"password\": \"NewStrongPassword@123\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
       "name": "Account",
-      "description": "Authenticated self-service for the signed-in admin, under /api/admin/account/**. Requires Authorization: Bearer {{accessToken}}.",
+      "description": "Authenticated self-service for the signed-in admin, under `/api/v1/admin/account/**`. Requires `Authorization: Bearer {{accessToken}}` — no specific permission beyond being authenticated, since every action here targets the caller's own account (there's no `{id}` in any of these paths). `me` and `change-password` are also the only two endpoints reachable while `mustChangePassword` is set.",
       "auth": {
         "type": "bearer",
-        "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{accessToken}}",
+            "type": "string"
+          }
+        ]
       },
       "item": [
         {
           "name": "Get My Profile (me)",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/admin/account/me", "host": ["{{baseUrl}}"], "path": ["api", "admin", "account", "me"] },
-            "description": "Returns the signed-in admin's profile: id, username, email, fullName, superAdmin, roles, authorities, mustChangePassword. The frontend should check mustChangePassword right after login/verify-otp and, if true, redirect straight to a change-password screen - every OTHER endpoint will reject with 403 MUST_CHANGE_PASSWORD until it's changed (this endpoint and change-password are the only two exceptions)."
-          }
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/account/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "account",
+                "me"
+              ]
+            },
+            "description": "**Permission:** none beyond being authenticated (acts on the caller's own account; reachable even while `mustChangePassword` is set).\n\nReturns the signed-in admin's profile: `{id, username, email, fullName, superAdmin, roles, authorities, mustChangePassword}`. `authorities` is `[\"SUPER_ADMIN\"]` for a super-admin, otherwise the list of effective permission codes from their assigned roles.\n\nThe frontend should check `mustChangePassword` right after login/verify-otp and, if true, redirect straight to a change-password screen — every *other* endpoint (this one and Change Password are the only two exceptions) rejects with `MUST_CHANGE_PASSWORD` 403 until it's cleared."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "My Permissions",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/admin/account/my-permissions", "host": ["{{baseUrl}}"], "path": ["api", "admin", "account", "my-permissions"] },
-            "description": "Returns the effective permission codes for the signed-in admin, e.g. [\"staff.view\", \"roles.view\", ...]. A super-admin gets [\"*\"] (wildcard - has every permission; the frontend should treat \"*\" as all-access rather than trying to match it literally against a known code list)."
-          }
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/account/my-permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "account",
+                "my-permissions"
+              ]
+            },
+            "description": "**Permission:** none beyond being authenticated.\n\nReturns the effective permission codes for the signed-in admin as a flat array, e.g. `[\"admin_staff.view\", \"admin_roles.view\", ...]`. A super-admin gets `[\"*\"]` — a wildcard meaning \"all permissions\", not a literal code to match against the permission catalog. The frontend should special-case `\"*\"` as all-access rather than trying to look it up."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Change Password",
           "request": {
             "method": "POST",
-            "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "url": { "raw": "{{baseUrl}}/api/admin/account/change-password", "host": ["{{baseUrl}}"], "path": ["api", "admin", "account", "change-password"] },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/account/change-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "account",
+                "change-password"
+              ]
+            },
+            "description": "**Permission:** none beyond being authenticated (reachable even while `mustChangePassword` is set — this is how it gets cleared).\n\n**Validation**\n- `currentPassword` — required, non-blank.\n- `newPassword` — required, 8-100 characters.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| `currentPassword` doesn't match the account's actual password | `VALIDATION_ERROR` | 400 — \"Current password is incorrect\" |\n| `newPassword` outside 8-100 chars | `VALIDATION_ERROR` | 400 — Bean Validation, with `fieldErrors` |\n\n**On success:** sets the new password and clears `mustChangePassword`, bumps `security_version`, **revokes every refresh token** for every device/session, invalidates any outstanding forgot-password reset link and pending login OTP, emails a \"password changed\" notification, and audits `PASSWORD_CHANGED`.\n\n**Important:** the access token used to make *this* request also stops working immediately afterward (its baked-in security version is now stale) — the frontend must log the user back in, or silently re-authenticate, right after a successful call. Don't assume the current session continues.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"currentPassword\": \"{{adminPassword}}\",\n  \"newPassword\": \"NewStrongPassword@123\"\n}"
-            },
-            "description": "Requires the current password. On success: revokes every other session (refresh + access tokens) for this admin on every device, invalidates any outstanding forgot-password reset link and pending login-OTP, and clears mustChangePassword. The CURRENT request's access token also stops working immediately after this - the frontend must log the user back in (or silently re-authenticate) right after a successful change."
-          }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
       "name": "Admin",
-      "description": "Permission-gated admin endpoints. Requires Authorization: Bearer {{accessToken}} AND the named permission (or super-admin).",
+      "description": "Permission-gated endpoints that don't belong to one specific CRUD resource. Requires `Authorization: Bearer {{accessToken}}` and the named permission (or super-admin).",
       "auth": {
         "type": "bearer",
-        "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{accessToken}}",
+            "type": "string"
+          }
+        ]
       },
       "item": [
         {
           "name": "Permission Catalog",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/admin/permissions", "host": ["{{baseUrl}}"], "path": ["api", "admin", "permissions"] },
-            "description": "Requires the roles.view permission. Returns the full permission catalog grouped by module - [{module, permissions: [{code, action, label}]}] - for building a role editor matrix. Lacking the permission: 403 ACCESS_DENIED."
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "permissions"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.view`.\n\nReturns the full permission catalog grouped by module — `[{module, permissions: [{code, action, label}]}]`, ordered by module then action — for building a role editor's permission matrix (checkbox grid). There are currently ~23 modules covering every business area (companies, workers, vacancy, payroll, agent, staff, roles, ...); `staff` and `roles` are the two modules relevant to this collection (7 and 4 permission codes respectively).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `admin_roles.view` | `ACCESS_DENIED` | 403 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Catalog excerpt",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/permissions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "permissions"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": [\n    {\n      \"module\": \"admin_roles\",\n      \"permissions\": [\n        {\n          \"code\": \"admin_roles.create\",\n          \"action\": \"create\",\n          \"label\": \"create\"\n        },\n        {\n          \"code\": \"admin_roles.delete\",\n          \"action\": \"delete\",\n          \"label\": \"delete\"\n        },\n        {\n          \"code\": \"admin_roles.edit\",\n          \"action\": \"edit\",\n          \"label\": \"edit\"\n        },\n        {\n          \"code\": \"admin_roles.view\",\n          \"action\": \"view\",\n          \"label\": \"view\"\n        }\n      ]\n    },\n    {\n      \"module\": \"admin_staff\",\n      \"permissions\": [\n        {\n          \"code\": \"admin_staff.create\",\n          \"action\": \"create\",\n          \"label\": \"create\"\n        },\n        {\n          \"code\": \"admin_staff.delete\",\n          \"action\": \"delete\",\n          \"label\": \"delete\"\n        },\n        {\n          \"code\": \"admin_staff.edit\",\n          \"action\": \"edit\",\n          \"label\": \"edit\"\n        },\n        {\n          \"code\": \"admin_staff.toggle_status\",\n          \"action\": \"toggle_status\",\n          \"label\": \"toggle_status\"\n        },\n        {\n          \"code\": \"admin_staff.view\",\n          \"action\": \"view\",\n          \"label\": \"view\"\n        },\n        {\n          \"code\": \"admin_staff.view_bank_details\",\n          \"action\": \"view_bank_details\",\n          \"label\": \"view_bank_details\"\n        },\n        {\n          \"code\": \"admin_staff.view_kyc\",\n          \"action\": \"view_kyc\",\n          \"label\": \"view_kyc\"\n        }\n      ]\n    }\n  ],\n  \"error\": null\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Roles",
+      "description": "Role CRUD and permission assignment, under `/api/v1/admin/roles/**`. Requires `Authorization: Bearer {{accessToken}}` and the matching `admin_roles.*` permission (`admin_roles.view`/`create`/`edit`/`delete` — 4 codes total).\n\n**Privilege-escalation guard** (`PermissionEscalationGuard`, shared with Staff's role-assignment check below): a non-super-admin can never create or edit a role to grant a permission they don't themselves currently hold. This closes a real gap — without it, someone holding `admin_roles.create`/`admin_roles.edit` but not `admin_staff.edit` could still define a role with more power than their own and have it take effect the moment *anyone* assigns it, including editing permissions onto a role that's already assigned to staff. Super-admins are exempt (they implicitly hold every permission).\n\n**System roles** (`systemRole: true`): the 4 seed roles (Sub Admin, and three more including Senior/Junior Developer) are protected from Update and Delete, but can still be *assigned to* or *removed from* staff normally.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{accessToken}}",
+            "type": "string"
           }
+        ]
+      },
+      "item": [
+        {
+          "name": "List Roles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.view`.\n\nReturns every role with its full `permissionCodes` list (no pagination — the role count is small and operator-managed, not user-generated)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:20:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Role",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles",
+                "{{roleId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.view`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| No role with this id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.create`.\n\n**Validation**\n- `name` — required, non-blank, max 100 chars.\n- `description` — optional, max 300 chars.\n- `permissionCodes` — required list (can be empty `[]` for a role with no permissions yet), each entry non-blank.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | `name` already used by another role | `CONFLICT` | 409 |\n| 2 | Any `permissionCodes` entry doesn't exist in the catalog | `VALIDATION_ERROR` | 400 — lists the unknown code(s) by name |\n| 3 | Caller is not a super-admin AND `permissionCodes` includes anything they don't themselves currently hold | `BUSINESS_RULE_VIOLATION` | 422 — \"You cannot grant a permission you do not hold yourself.\" |\n\nStep 2 runs before step 3 deliberately, so a typo'd permission code reports as \"unknown code\" rather than a confusing \"you don't hold this [nonexistent] permission\".\n\n**On success:** creates a non-system role (`systemRole: false` — only the 4 seed roles are system roles, and only those are protected from edit/delete), audits `ROLE_CREATED`. This request's Tests script saves the new id to `{{roleId}}`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Read-only access for QA\",\n  \"permissionCodes\": [\"dashboard.view\", \"workers.view\"]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('roleId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "400 - Unknown permission code",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Read-only access for QA\",\n  \"permissionCodes\": [\"dashboard.view\", \"workers.view\"]\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Unknown permission code(s): dashboard.viewx\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:21:10Z\",\n    \"traceId\": \"b2c3d4e5f6071829\"\n  }\n}"
+            },
+            {
+              "name": "422 - Escalation blocked",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Read-only access for QA\",\n  \"permissionCodes\": [\"dashboard.view\", \"workers.view\"]\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"You cannot grant a permission you do not hold yourself.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:21:45Z\",\n    \"traceId\": \"b2c3d4e5f607182a\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Role",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles",
+                "{{roleId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.edit`.\n\nFull replace of the role's name, description, and entire permission set (not a merge/patch) — omitted codes are *removed* from the role.\n\n**Validation:** identical to Create Role.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | Role id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| 2 | Role is a system role (`systemRole: true` — the 4 seed roles) | `BUSINESS_RULE_VIOLATION` | 422 — \"System roles cannot be modified.\" |\n| 3 | `name` already used by a *different* role | `CONFLICT` | 409 |\n| 4 | Unknown permission code | `VALIDATION_ERROR` | 400 |\n| 5 | Escalation (same rule as Create Role) | `BUSINESS_RULE_VIOLATION` | 422 |\n\n**Important, non-obvious side effect:** every admin currently assigned this role keeps whatever permissions they had **until their access token naturally expires or they make a new authenticated request** — there's no proactive re-login forced here, unlike changing a *staff member's* role assignment (see Update Staff), which does force one. Editing a role's permissions is a slower-moving admin operation; if this surprises you operationally, treat it as something to flag, not rely on silently.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Updated description\",\n  \"permissionCodes\": [\"dashboard.view\"]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Role",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles",
+                "{{roleId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.delete`.\n\n**Behavior / errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Role id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Role is a system role | `BUSINESS_RULE_VIOLATION` | 422 — \"System roles cannot be deleted.\" |\n| One or more staff members are still assigned this role | `CONFLICT` | 409 — \"Cannot delete role: N staff member(s) are currently assigned to it. Reassign them first.\" |\n\nNo soft-delete / archive — a successful delete is permanent. There is intentionally no cascade-reassignment; the caller must move affected staff to a different role first (via Update Staff), which is the safer default for an access-control resource."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Staff",
+      "description": "Staff/admin account CRUD, role assignment, and the profile/KYC/bank-detail sub-resources, under `/api/v1/admin/staff/**`. Requires `Authorization: Bearer {{accessToken}}` and the matching `admin_staff.*` permission (7 codes: `view`/`create`/`edit`/`delete`/`toggle_status`/`view_kyc`/`view_bank_details`).\n\nSame privilege-escalation guard as Roles applies whenever this module assigns roles to a staff member (Create/Update Staff): you cannot hand out a role carrying a permission you don't hold yourself.\n\n**KYC and bank-account-number reads are masked** (all but the last 4 characters replaced with `*`) unless the caller additionally holds `admin_staff.view_kyc` / `admin_staff.view_bank_details` — by default only the **Senior Developer** and **Junior Developer** seed roles hold those two (the same two roles that hold the equivalent sensitive-data permissions for workers, e.g. `workers.view_wallet`). Both values are also **encrypted at rest** (AES-256-GCM) independently of masking — masking controls what a given API caller sees; encryption protects the data if the database itself is ever compromised. The two controls are intentionally layered, not redundant.\n\nProfile/KYC/bank-detail rows are **not** created by Create Staff — they start fully empty (every field `null`) and are populated later via their own PUT endpoints, independently and progressively.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{accessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "List Staff",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff?page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view`.\n\nStandard Spring pagination via query params: `page` (0-based), `size`, `sort` (e.g. `sort=fullName,asc`). Returns a `PageResponse<AdminStaffDto>`: `{content: [...], page, size, totalElements, totalPages, first, last}`. KYC/bank fields are **not** included here — fetch them per-staff-member via the sub-resource endpoints below."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff?page=0&size=20",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "0"
+                    },
+                    {
+                      "key": "size",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:22:00Z\",\n    \"traceId\": \"c3d4e5f607182930\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Staff",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view`.\n\nReturns `AdminStaffDto`: `{id, username, email, fullName, phone, superAdmin, status, roles: [{id, name}], lastLoginAt, createdAt}`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| No staff member with this id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Staff",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.create`.\n\n**Validation**\n- `username` — optional, max 100 chars. An empty string (`\"\"`) is treated identically to `null`/omitted (normalized to `NULL` in storage) — so two staff can both be created with \"no username\" without colliding on the unique constraint.\n- `email` — required, valid email format, max 320 chars.\n- `fullName` — required, non-blank, max 150 chars.\n- `phone` — optional, max 20 chars.\n- `roleIds` — required list (can be `[]`), each a UUID of an existing role.\n\n**No `password` field** — the account is created with a random, cryptographically-generated, never-disclosed password (`mustChangePassword` starts `true`), and an invite email (template `ADMIN_STAFF_INVITE`) is sent with a set-password link — the recipient completes onboarding via **Auth > Accept Invite**. **No `superAdmin` field either** — that flag stays bootstrap-only (seeded at application startup) and is never settable through this API.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | `email` already belongs to another admin (case-insensitive) | `CONFLICT` | 409 |\n| 2 | `username` provided and already taken (case-insensitive) | `CONFLICT` | 409 |\n| 3 | Any `roleIds` entry doesn't exist | `VALIDATION_ERROR` | 400 — \"One or more role ids do not exist.\" |\n| 4 | Caller is not a super-admin AND the union of the requested roles' permissions includes anything the caller doesn't themselves hold | `BUSINESS_RULE_VIOLATION` | 422 — same escalation guard as Roles |\n\n**On success:** audits `STAFF_CREATED`. This request's Tests script saves the new id to `{{staffId}}`. Profile/KYC/bank-detail rows are **not** created here — they start out empty (all-null) and are set separately via the sub-resource endpoints below.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": null,\n  \"email\": \"new.staff@example.com\",\n  \"fullName\": \"New Staff Member\",\n  \"phone\": null,\n  \"roleIds\": [\"{{roleId}}\"]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('staffId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": null,\n  \"email\": \"new.staff@example.com\",\n  \"fullName\": \"New Staff Member\",\n  \"phone\": null,\n  \"roleIds\": [\"{{roleId}}\"]\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n    \"username\": null,\n    \"email\": \"new.staff@example.com\",\n    \"fullName\": \"New Staff Member\",\n    \"phone\": null,\n    \"superAdmin\": false,\n    \"status\": \"ACTIVE\",\n    \"roles\": [\n      {\n        \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n        \"name\": \"QA Tester\"\n      }\n    ],\n    \"lastLoginAt\": null,\n    \"createdAt\": \"2026-10-24T10:23:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - Duplicate email",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": null,\n  \"email\": \"new.staff@example.com\",\n  \"fullName\": \"New Staff Member\",\n  \"phone\": null,\n  \"roleIds\": [\"{{roleId}}\"]\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"An admin with this email already exists.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:23:30Z\",\n    \"traceId\": \"d4e5f6071829303a\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Staff",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit`.\n\nFull replace of `username`/`fullName`/`phone`/roles. **`email` is intentionally not editable here** — changing a login identifier is treated as a bigger decision than a routine profile edit (not currently exposed through any endpoint).\n\n**Validation:** same as Create Staff, minus `email`.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| 2 | Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 — \"Super-admin accounts cannot be modified through this endpoint.\" |\n| 3 | `username` provided, changed, and already taken by someone else | `CONFLICT` | 409 |\n| 4 | Unknown role id | `VALIDATION_ERROR` | 400 |\n| 5 | Escalation (same rule as Create Staff) | `BUSINESS_RULE_VIOLATION` | 422 |\n\n**Side effect — forced re-login, but only when roles actually changed:** if the new role set differs from what the staff member had before, their `security_version` is bumped and every refresh token they hold is revoked, so a permission *removal* takes effect immediately instead of riding out the access token's remaining TTL (up to 15 min). A plain name/phone edit with the same roles does **not** trigger this — don't expect a re-login just from editing `fullName`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": null,\n  \"fullName\": \"Updated Name\",\n  \"phone\": null,\n  \"roleIds\": [\"{{roleId}}\"]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Set Staff Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "status"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.toggle_status`.\n\n**Validation**\n- `status` — required. `status` must be exactly `\"ACTIVE\"` or `\"DISABLED\"` — an explicit target, not a toggle, so two quick successive calls can't race into an unintended end state.\n\n**Behavior / errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 — \"Super-admin accounts cannot be deactivated through this endpoint.\" (message substitutes \"activated\" when `status: \"ACTIVE\"`) |\n| Target is **your own** account | `BUSINESS_RULE_VIOLATION` | 422 — \"You cannot deactivate your own account.\" (same substitution) |\n\n**Side effect:** setting `DISABLED` immediately revokes every refresh token for that admin (so no new access token can be minted), **and** any access token they're still mid-use with is rejected on its very next request — `AdminSessionPolicyFilter` checks `active` status on every authenticated call, not just at token-issue time. There's no lag waiting for the current token to expire, unlike Logout's known limitation above.\n\nAudits `STAFF_STATUS_CHANGED` with the before→after transition.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"DISABLED\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "422 - Cannot disable self",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/status",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "status"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"DISABLED\"\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"You cannot deactivate your own account.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:24:15Z\",\n    \"traceId\": \"e5f6071829303a4b\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Staff",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.delete`.\n\n**Behavior / errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 — \"Super-admin accounts cannot be deleted through this endpoint.\" |\n| Target is your own account | `BUSINESS_RULE_VIOLATION` | 422 — \"You cannot delete your own account.\" |\n\n**Hard delete** — no soft-delete/archive; the row (and its profile/KYC/bank-detail satellite rows, via `ON DELETE CASCADE`) is gone permanently, including its role assignments. Past audit log entries referencing this admin are **not** affected: `admin_audit_log.actor_admin_id` becomes `NULL` (`ON DELETE SET NULL`), but `actor_email` is a point-in-time snapshot captured when each log entry was originally written, so \"who did this\" in historical audit records stays readable even after the actor is deleted."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Staff Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "profile"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view`.\n\nReturns `{dateOfBirth, gender, addressLine, pincode}` — every field is `null` until explicitly set via Update Staff Profile (there's no profile row created automatically by Create Staff). Not sensitive data; never masked, no extra permission needed beyond `admin_staff.view`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Staff Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "profile"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit`.\n\n**Validation** — every field optional (captured progressively, not necessarily all at once); send `null` for any field you don't want to set yet.\n- `dateOfBirth` — ISO date (`YYYY-MM-DD`), no past/future constraint enforced.\n- `gender` — one of `MALE` / `FEMALE` / `OTHER`.\n- `addressLine` — max 255 chars.\n- `pincode` — max 10 chars (no numeric/format check — deliberately permissive, see KYC's note below for the same rationale).\n\n**Behavior:** full replace of all 4 fields (not a merge) — omitting a field that was previously set clears it to `null`. Creates the profile row on first write if it doesn't exist yet.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n\nAudits `STAFF_PROFILE_UPDATED`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dateOfBirth\": \"1995-06-15\",\n  \"gender\": \"FEMALE\",\n  \"addressLine\": \"221B Baker Street\",\n  \"pincode\": \"560001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Staff KYC",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "kyc"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view` (for masked values) — see below for unmasked.\n\nReturns `{aadhaarNumber, panNumber, uanNumber, pfNumber, esicNumber}` — all `null` until set. Values are **encrypted at rest** (AES-256-GCM, random IV per value, via `PiiEncryptor`/`EncryptedStringConverter` — transparent to this API, decrypted on read).\n\n**Masking:** `admin_staff.view` alone (checked at the controller for both GET and PUT) only ever returns **masked** values — all but the last 4 characters replaced with `*` (e.g. `\"********9012\"`), or fully masked if the value is 4 characters or shorter. Seeing the **unmasked** value additionally requires `admin_staff.view_kyc`, which by default only the **Senior Developer** and **Junior Developer** seed roles hold. Masking is applied purely in the response — the stored value is unaffected either way.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Masked (admin_staff.view only)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "kyc"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"aadhaarNumber\": \"********9012\",\n    \"panNumber\": \"******34F\",\n    \"uanNumber\": null,\n    \"pfNumber\": null,\n    \"esicNumber\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "200 - Unmasked (admin_staff.view_kyc)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "kyc"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"aadhaarNumber\": \"123456789012\",\n    \"panNumber\": \"ABCDE1234F\",\n    \"uanNumber\": null,\n    \"pfNumber\": null,\n    \"esicNumber\": null\n  },\n  \"error\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Staff KYC",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "kyc"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit` (the write side has no separate \"can write KYC\" permission — `admin_staff.edit` alone is sufficient, deliberately, to avoid an unused extra knob; only *reading* unmasked is gated further).\n\n**Validation** — every field optional (progressive capture): `aadhaarNumber`/`panNumber`/`uanNumber` max 20 chars, `pfNumber` max 50, `esicNumber` max 30. **Deliberately no format/checksum validation** (e.g. Aadhaar's 12-digit pattern, PAN's checksum letter) — only a length cap, to avoid rejecting legitimate input against a guessed-at pattern that might not match real-world data exactly.\n\n**Behavior:** full replace of all 5 fields. Creates the KYC row on first write if it doesn't exist yet. The response is masked using the exact same rule as Get Staff KYC — note that even the admin who just *wrote* a value gets it back masked if they only hold `admin_staff.view`, not `admin_staff.edit`+`admin_staff.view_kyc` together.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n| Any field exceeds its max length | `VALIDATION_ERROR` | 400 |\n\nAudits `STAFF_KYC_UPDATED`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aadhaarNumber\": \"123456789012\",\n  \"panNumber\": \"ABCDE1234F\",\n  \"uanNumber\": null,\n  \"pfNumber\": null,\n  \"esicNumber\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Staff Bank Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "bank-detail"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view` (for a masked account number) — see below for unmasked.\n\nReturns `{accountHolderName, bankName, accountNumber, ifscCode, branchName}` — all `null` until set. `accountNumber` is **encrypted at rest** (same mechanism as KYC).\n\n**Masking:** `accountNumber` follows the exact same masking rule as KYC above, gated by `admin_staff.view_bank_details` instead of `admin_staff.view_kyc` (same two seed roles hold it by default, but they're two independent permission codes — holding one does not imply the other). `accountHolderName`, `bankName`, `ifscCode`, `branchName` are **never masked** — only the account number is treated as sensitive here.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Staff Bank Detail",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "bank-detail"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit` (same reasoning as Update Staff KYC — no separate write permission).\n\n**Validation** — every field optional (progressive capture): `accountHolderName`/`bankName`/`branchName` max 150 chars, `accountNumber` max 30, `ifscCode` max 15. No IFSC-format or account-number-checksum validation, same rationale as KYC.\n\n**Behavior:** full replace of all 5 fields. Creates the row on first write if it doesn't exist yet. The response's `accountNumber` is masked using the same rule as Get Staff Bank Detail.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n| Any field exceeds its max length | `VALIDATION_ERROR` | 400 |\n\nAudits `STAFF_BANK_DETAIL_UPDATED`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\",\n  \"branchName\": \"MG Road\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
       "name": "Health",
-      "description": "Public, unauthenticated.",
+      "description": "Public, unauthenticated (top-level status only — see the request's own description for when component detail appears).",
       "item": [
         {
           "name": "Health",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/actuator/health", "host": ["{{baseUrl}}"], "path": ["actuator", "health"] },
-            "description": "Returns {\"status\":\"UP\"} when healthy. Component detail (db, redis, mail) only shows for authenticated/authorized callers."
-          }
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "**Permission:** none — path is public (`/actuator/health/**` is in `SecurityConfig.PUBLIC_PATHS`).\n\nReturns `{\"status\": \"UP\"}` when healthy, with no request body validation or application-specific error codes (this is a Spring Boot Actuator endpoint, not part of the `ApiResponse` envelope used everywhere else in this collection).\n\n**Component detail** (`components: {db: {...}, redis: {...}, ...}`, `mail` excluded via `management.health.mail.enabled=false`) only appears when the request carries a **valid, authenticated** bearer token — `management.endpoint.health.show-details=when-authorized` with no specific role configured, so any authenticated principal (not just one holding a particular permission) sees it; a fully anonymous request only ever sees the bare top-level `status`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     }

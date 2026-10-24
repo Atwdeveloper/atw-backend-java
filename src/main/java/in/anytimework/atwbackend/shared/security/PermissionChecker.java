@@ -6,7 +6,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 /**
- * Central authorization check used from {@code @PreAuthorize("@authz.has('staff.view')")}.
+ * Central authorization check used from {@code @PreAuthorize("@authz.has('admin_staff.view')")}.
  * A super-admin (carrying the {@code SUPER_ADMIN} authority) passes every check; otherwise the
  * caller must hold the exact permission code. Keeping this in one bean means the super-admin
  * bypass is defined once, not repeated in every annotation.

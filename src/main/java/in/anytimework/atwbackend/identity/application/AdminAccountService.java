@@ -1,9 +1,9 @@
 package in.anytimework.atwbackend.identity.application;
 
 import in.anytimework.atwbackend.identity.application.dto.AdminProfile;
+import in.anytimework.atwbackend.identity.domain.AdminAuthTokenRepository;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
-import in.anytimework.atwbackend.identity.domain.AuthTokenRepository;
 import in.anytimework.atwbackend.identity.domain.AuthTokenType;
 import in.anytimework.atwbackend.notification.application.NotificationService;
 import in.anytimework.atwbackend.notification.application.SendEmailCommand;
@@ -23,7 +23,7 @@ import java.util.UUID;
 public class AdminAccountService {
 
     private final AdminUserRepository adminUsers;
-    private final AuthTokenRepository authTokens;
+    private final AdminAuthTokenRepository authTokens;
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
     private final OtpService otpService;
@@ -31,7 +31,7 @@ public class AdminAccountService {
     private final AdminAuditService audit;
     private final Clock clock;
 
-    public AdminAccountService(AdminUserRepository adminUsers, AuthTokenRepository authTokens,
+    public AdminAccountService(AdminUserRepository adminUsers, AdminAuthTokenRepository authTokens,
                                PasswordEncoder passwordEncoder, RefreshTokenService refreshTokenService,
                                OtpService otpService, NotificationService notificationService,
                                AdminAuditService audit, Clock clock) {
