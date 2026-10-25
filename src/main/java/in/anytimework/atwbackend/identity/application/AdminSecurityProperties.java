@@ -19,6 +19,7 @@ public record AdminSecurityProperties(
         Duration lockoutDuration,
         Duration passwordResetTtl,
         Duration inviteTtl,
-        boolean otpInResponse
+        boolean otpInResponse,
+        String fixedOtp
 ) {
 }
