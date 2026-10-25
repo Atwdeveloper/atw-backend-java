@@ -39,9 +39,22 @@ class StartupSecurityValidatorTest {
         return new StartupSecurityValidator(environment, jwt, bootstrapProperties, pii, admin);
     }
 
+    /** Simulates the "dev" profile being active - and only "dev", not local/test too. */
+    private StartupSecurityValidator devProfileValidator(PiiEncryptionProperties pii, AdminSecurityProperties admin) {
+        Environment devEnvironment = mock(Environment.class);
+        when(devEnvironment.acceptsProfiles(any(Profiles.class)))
+                .thenAnswer(invocation -> ((Profiles) invocation.getArgument(0)).matches("dev"::equals));
+        JwtProperties jwt = new JwtProperties(VALID_JWT_SECRET, Duration.ofMinutes(15), Duration.ofDays(7), "atw-backend");
+        return new StartupSecurityValidator(devEnvironment, jwt, bootstrapProperties, pii, admin);
+    }
+
     private static AdminSecurityProperties adminSecurity(boolean otpInResponse) {
+        return adminSecurity(otpInResponse, null);
+    }
+
+    private static AdminSecurityProperties adminSecurity(boolean otpInResponse, String fixedOtp) {
         return new AdminSecurityProperties(true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 3, 5,
-                Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofDays(3), otpInResponse);
+                Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofDays(3), otpInResponse, fixedOtp);
     }
 
     @Test
@@ -84,5 +97,33 @@ class StartupSecurityValidatorTest {
         StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(true));
         assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("otp-in-response");
+    }
+
+    @Test
+    void fixedOtpSetOutsideDevProfile_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "123456"));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ADMIN_FIXED_OTP")
+                .hasMessageContaining("\"dev\"");
+    }
+
+    @Test
+    void fixedOtpValidUnderDevProfile_doesNotThrow() {
+        StartupSecurityValidator v = devProfileValidator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "123456"));
+        assertThatCode(() -> v.run(null)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void fixedOtpWrongLengthUnderDevProfile_throws() {
+        StartupSecurityValidator v = devProfileValidator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "12345"));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("6 numeric digits");
+    }
+
+    @Test
+    void fixedOtpNonNumericUnderDevProfile_throws() {
+        StartupSecurityValidator v = devProfileValidator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "12345a"));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("numeric digits");
     }
 }

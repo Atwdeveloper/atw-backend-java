@@ -64,6 +64,10 @@ changes are needed between local and Azure — only these variables differ.
 > a default bootstrap admin password (see §8) — it ships inside the image like any other classpath
 > resource, and nothing stops it from activating except this one setting never containing `local`.
 > Leave `SPRING_PROFILES_ACTIVE` unset in Azure.
+>
+> The one deliberate exception is `dev` — a separate, narrower profile for a pre-SMTP dev/staging
+> slot. It does **not** relax `JWT_SECRET`/`PII_ENCRYPTION_KEY`/`ADMIN_BOOTSTRAP_PASSWORD` at all; it
+> only unlocks `ADMIN_FIXED_OTP` (see below). Never set `dev` on a production app.
 
 ### Required only for first boot (creating the first super-admin)
 
@@ -99,7 +103,14 @@ actual smoke test (§7).
 | `ADMIN_MAX_FAILED_LOGINS` / `ADMIN_LOCKOUT_DURATION` | `5` / `PT15M` | Password-attempt lockout |
 | `ADMIN_RATE_LIMIT_ENABLED` / `_MAX_ATTEMPTS` / `_WINDOW` | `true` / `10` / `PT1M` | Per-IP request cap on login/forgot-password/reset-password/accept-invite (Redis-backed, holds across replicas) |
 | `ADMIN_OTP_IN_RESPONSE` | `false` | Test-only: puts the OTP directly in the login/resend-otp response instead of only emailing it. **Refused at startup outside local/test** — see §8. |
+| `ADMIN_FIXED_OTP` | *(unset)* | Pre-SMTP dev-slot-only: every issued OTP (login + resend) is this fixed value instead of a random code, so you can log in by typing a known code instead of reading logs/email. Must be exactly `ADMIN_OTP_LENGTH` numeric digits. **Refused at startup unless `SPRING_PROFILES_ACTIVE` includes `dev`** — see §8. |
 | `DOC_RECONCILE_STALE_AFTER` / `DOC_RECONCILE_INTERVAL` | `PT10M` / `PT5M` | How a background job self-heals a document upload that uploaded its blob but didn't finish committing |
+
+> **No working email yet on a dev slot?** Set `SPRING_PROFILES_ACTIVE=dev` *and* `ADMIN_FIXED_OTP=<N
+> digits>` together (both required — setting only one does nothing extra). Every admin then logs in
+> with that same fixed code instead of a random one. This is meant to be temporary: unset
+> `ADMIN_FIXED_OTP` the moment a real `MAIL_PROVIDER` is configured on that environment. Never set it
+> anywhere `SPRING_PROFILES_ACTIVE` isn't exactly `dev` — startup refuses to boot if it is.
 
 > Store every secret (`DB_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `ADMIN_BOOTSTRAP_PASSWORD`, mail
 > credentials) as a **Container Apps secret** / App Service app setting / Key Vault reference — never
@@ -234,6 +245,10 @@ dockerized Postgres/Redis/the app itself — see §9) and produces exactly the r
   left on. Same check for `ADMIN_BOOTSTRAP_PASSWORD` when bootstrap is enabled. **A failed deploy
   here means a missing/weak secret (or a test-only flag left on), not a bug** — fix the env var,
   don't work around the check.
+- **`ADMIN_FIXED_OTP` is gated the same strict way, plus a profile check.** It's refused at startup
+  if set under any profile other than `dev` (a static, config-known OTP is a standing 2FA bypass for
+  every admin — see §3), and refused if it isn't exactly `ADMIN_OTP_LENGTH` numeric digits. When it
+  *is* active, startup logs a loud warning on every boot so it's never silently forgotten about.
 - **Staff KYC numbers and bank account numbers are encrypted at rest** (AES-256-GCM, a fresh random
   IV per value) and masked in every API response unless the caller holds the narrower
   `admin_staff.view_kyc` / `admin_staff.view_bank_details` permission.

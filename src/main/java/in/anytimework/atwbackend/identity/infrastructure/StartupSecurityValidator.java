@@ -21,8 +21,9 @@ import java.util.Base64;
 /**
  * Refuses to start the application outside the "local"/"test" profiles if any security-critical
  * setting is missing, too weak, or still a known local-dev literal: the JWT signing secret, the
- * bootstrap super-admin password, the PII encryption key, or the test-only "OTP in API response"
- * shortcut being left on.
+ * bootstrap super-admin password, the PII encryption key, the test-only "OTP in API response"
+ * shortcut being left on, or a fixed/static OTP value configured outside the dedicated "dev"
+ * profile.
  *
  * <p>Runs before every other {@link ApplicationRunner} (notably {@link AdminBootstrapRunner}),
  * so a misconfigured deployment never gets as far as creating a super-admin with a known password,
@@ -120,6 +121,42 @@ public class StartupSecurityValidator implements ApplicationRunner {
                     + "login OTP codes directly in the API response, defeating 2FA entirely, and must "
                     + "never be enabled outside the local/test profiles.");
         }
+
+        validateFixedOtp();
+    }
+
+    /**
+     * {@code atw.admin.security.fixed-otp} (ADMIN_FIXED_OTP) makes every issued OTP a known, static
+     * value - a standing bypass of 2FA for every admin account wherever it's active. It exists only
+     * to unblock admin login on a deployed environment before a real email provider is configured,
+     * so it is permitted under exactly one profile: "dev" (see application-dev.properties). This is
+     * a separate, narrower allowance than the top-of-method local/test short-circuit - a "dev"
+     * deployment still must satisfy every other check above (real JWT secret, real bootstrap
+     * password, real PII key, otp-in-response off).
+     */
+    private void validateFixedOtp() {
+        String fixedOtp = adminSecurityProperties.fixedOtp();
+        if (!StringUtils.hasText(fixedOtp)) {
+            return;
+        }
+        if (!environment.acceptsProfiles(Profiles.of("dev"))) {
+            throw new IllegalStateException(
+                    "atw.admin.security.fixed-otp (ADMIN_FIXED_OTP) is set, but the active profile is "
+                    + "not \"dev\". A static, config-known OTP is a standing bypass of 2FA for every "
+                    + "admin account, so it is only ever permitted under the dedicated \"dev\" profile - "
+                    + "never on any profile a production deployment might also use.");
+        }
+        int expectedLength = adminSecurityProperties.otpLength();
+        boolean allDigits = fixedOtp.chars().allMatch(Character::isDigit);
+        if (!allDigits || fixedOtp.length() != expectedLength) {
+            throw new IllegalStateException(
+                    "atw.admin.security.fixed-otp (ADMIN_FIXED_OTP) must be exactly " + expectedLength
+                    + " numeric digits, matching atw.admin.security.otp-length.");
+        }
+        log.error("Active profile is \"dev\" with ADMIN_FIXED_OTP set - every admin login/resend-otp "
+                + "issues the fixed code \"{}\" instead of a random one. This is a deliberate, scoped "
+                + "2FA weakening for pre-SMTP testing only and MUST be unset the moment real OTP "
+                + "delivery (email) is available on this environment.", fixedOtp);
     }
 
     private void validatePiiEncryptionKey() {
