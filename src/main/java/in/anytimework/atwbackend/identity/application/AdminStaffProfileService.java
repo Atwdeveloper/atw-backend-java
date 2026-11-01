@@ -35,7 +35,7 @@ public class AdminStaffProfileService {
     public AdminUserProfileDto get(UUID staffId) {
         requireStaffExists(staffId);
         return profiles.findByAdminUserId(staffId).map(this::toDto)
-                .orElse(new AdminUserProfileDto(null, null, null, null));
+                .orElse(new AdminUserProfileDto(null, null));
     }
 
     @Transactional
@@ -45,7 +45,7 @@ public class AdminStaffProfileService {
             throw new BusinessRuleException("Super-admin accounts cannot be modified through this endpoint.");
         }
         AdminUserProfile profile = profiles.findByAdminUserId(staffId).orElseGet(() -> new AdminUserProfile(staffId));
-        profile.update(request.dateOfBirth(), request.gender(), request.addressLine(), request.pincode());
+        profile.update(request.dateOfBirth(), request.gender());
         profile = profiles.save(profile);
         audit.record(currentAdmin.id().orElse(null), "ADMIN_STAFF_PROFILE_UPDATED", staffId.toString(), ip, userAgent);
         return toDto(profile);
@@ -56,7 +56,6 @@ public class AdminStaffProfileService {
     }
 
     private AdminUserProfileDto toDto(AdminUserProfile profile) {
-        return new AdminUserProfileDto(profile.getDateOfBirth(), profile.getGender(),
-                profile.getAddressLine(), profile.getPincode());
+        return new AdminUserProfileDto(profile.getDateOfBirth(), profile.getGender());
     }
 }

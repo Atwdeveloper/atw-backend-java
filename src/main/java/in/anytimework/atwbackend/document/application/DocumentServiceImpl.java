@@ -9,6 +9,8 @@ import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -34,6 +36,14 @@ class DocumentServiceImpl implements DocumentService {
         this.fileStorage = fileStorage;
         this.properties = properties;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        // REQUIRES_NEW, not the default REQUIRED: this must genuinely commit on its own even when a
+        // caller (e.g. masterdata's icon-upload services) invokes upload()/delete() from inside its
+        // own @Transactional method. Under the default propagation the two execute() calls below
+        // would silently join that caller's transaction instead of committing independently, so a
+        // later failure in the *caller's* unrelated work would roll back the PENDING->COMPLETE flip
+        // (or the delete) right along with it - after the blob itself was already written/removed in
+        // storage, which no transaction can undo. That defeats the whole point of the split below.
+        this.transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     // Split into two independently-committed transactions around the blob upload: if the final
@@ -80,8 +90,12 @@ class DocumentServiceImpl implements DocumentService {
         return fileStorage.generateDownloadUrl(document.getStorageKey(), validFor);
     }
 
+    // REQUIRES_NEW for the same reason as the upload() TransactionTemplate above: the blob delete is
+    // a real, unrollback-able side effect, so this must commit independently of whatever transaction
+    // the caller might already be in - otherwise a later failure in the caller's own work rolls back
+    // the row deletion while the blob stays gone, leaving a dangling reference to a 404ing blob.
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void delete(UUID documentId) {
         Document document = getOrThrow(documentId);
         fileStorage.delete(document.getStorageKey());

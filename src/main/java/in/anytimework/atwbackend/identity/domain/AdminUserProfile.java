@@ -15,7 +15,7 @@ import java.util.UUID;
  * Ordinary demographic PII for an admin/staff account — lower sensitivity than
  * {@link AdminUserKyc} or {@link AdminUserBankDetail}, kept in its own table so it can carry a
  * looser permission boundary ({@code admin_staff.view}) than those do. Optional: a row exists only once
- * this data has actually been captured.
+ * this data has actually been captured. Address lives separately in {@link AdminUserAddress}.
  */
 @Getter
 @Entity
@@ -32,12 +32,6 @@ public class AdminUserProfile extends BaseEntity {
     @Column(length = 20)
     private Gender gender;
 
-    @Column(name = "address_line", length = 255)
-    private String addressLine;
-
-    @Column(length = 10)
-    private String pincode;
-
     protected AdminUserProfile() {
         // required by JPA
     }
@@ -46,10 +40,8 @@ public class AdminUserProfile extends BaseEntity {
         this.adminUserId = adminUserId;
     }
 
-    public void update(LocalDate dateOfBirth, Gender gender, String addressLine, String pincode) {
+    public void update(LocalDate dateOfBirth, Gender gender) {
         this.dateOfBirth = dateOfBirth;
         this.gender = gender;
-        this.addressLine = addressLine;
-        this.pincode = pincode;
     }
 }

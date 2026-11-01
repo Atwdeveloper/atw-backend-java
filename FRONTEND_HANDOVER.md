@@ -227,8 +227,10 @@ are required when creating a staff member). Each is a plain get/replace pair und
 
 | Method & path | Body | Success (200) | Notes |
 |---|---|---|---|
-| `GET /{id}/profile` | — | `AdminUserProfileDto` | `admin_staff.view`. `{dateOfBirth, gender, addressLine, pincode}` — any/all null until set |
-| `PUT /{id}/profile` | `{dateOfBirth?, gender?, addressLine?, pincode?}` | `AdminUserProfileDto` | `admin_staff.edit` |
+| `GET /{id}/profile` | — | `AdminUserProfileDto` | `admin_staff.view`. `{dateOfBirth, gender}` — any/all null until set |
+| `PUT /{id}/profile` | `{dateOfBirth?, gender?}` | `AdminUserProfileDto` | `admin_staff.edit` |
+| `GET /{id}/address` | — | `AdminUserAddressDto` | `admin_staff.view`. `{line1, line2, stateId, cityId, pincode, latitude, longitude, formattedAddress}` — `stateId`/`cityId` reference the Masterdata geography lookups (§4, below); `latitude`/`longitude`/`formattedAddress` are groundwork for a future geocoding integration and always `null` today. Returns an all-null object (not a 404) if nothing's been saved yet. `line1`/`line2` encrypted at rest. |
+| `PUT /{id}/address` | `{line1?, line2?, stateId?, cityId?, pincode?}` | `AdminUserAddressDto` | `admin_staff.edit`. Full replace. An unknown `stateId`/`cityId` returns `400 VALIDATION_ERROR`, same as every other foreign-key check in this API. Targeting a super-admin account is rejected separately with `422 BUSINESS_RULE_VIOLATION`. |
 | `GET /{id}/kyc` | — | `AdminUserKycDto` | `admin_staff.view`. `{aadhaarNumber, panNumber, uanNumber, pfNumber, esicNumber}` — **masked** (e.g. `"********9012"`) unless the caller also holds `admin_staff.view_kyc` |
 | `PUT /{id}/kyc` | `{aadhaarNumber?, panNumber?, uanNumber?, pfNumber?, esicNumber?}` | `AdminUserKycDto` (masked per the same rule) | `admin_staff.edit`. Values are encrypted at rest; no format validation beyond a length cap |
 | `GET /{id}/bank-detail` | — | `AdminUserBankDetailDto` | `admin_staff.view`. `{accountHolderName, bankName, accountNumber, ifscCode, branchName}` — `accountNumber` is **masked** unless the caller also holds `admin_staff.view_bank_details` |
@@ -253,6 +255,107 @@ an unmasked response as a privileged view, not the normal case.
 `AdminRoleDto`: `{id, name, description, systemRole, permissionCodes[]}`.
 
 Staff role assignment (`POST`/`PUT /api/v1/admin/staff`) has the identical "can't grant beyond your own permissions" rule on `roleIds`, for the same reason. If a `PUT /{id}` on staff actually changes which roles that person holds (not just a name/phone edit), it immediately invalidates every one of *that staff member's* sessions — they're logged out everywhere and must log in again to pick up the new permission set, the same way disabling an account already does.
+
+### Masterdata — Geography — `/api/v1/masterdata/**` (requires `Authorization: Bearer`, no specific permission)
+
+Read-only address-form dropdowns, identical for every actor — not nested under `/admin`.
+
+| Method & path | Body | Success (200) | Notes |
+|---|---|---|---|
+| `GET /states` | — | `StateSummary[]` | `{id, name, code}` — all 36 Indian states/UTs, seeded, never created via API |
+| `GET /states/{stateId}/cities` | — | `CitySummary[]` | `{id, name}` — district-grain data (784 districts) that ATW's API calls "city" as a product-vocabulary choice. An unknown `stateId` returns `[]`, **not** a 404 — there's no existence check on this particular read. |
+
+### Masterdata — admin resources — `/api/v1/admin/masterdata/**` (requires `Authorization: Bearer` + the matching permission below)
+
+Reference/lookup data for the rest of the platform: ATW's internal org departments, the industry → designation → skill hierarchy vacancies are posted under, skill-category groupings used for minimum-wage lookups, and effective-dated statutory minimum wage rates. A full Postman folder with worked examples for every endpoint below (including error cases) lives in `postman/ATW-Backend.postman_collection.json` under **Masterdata**.
+
+**Conventions shared by every resource below:** `status` is always `"ACTIVE"`/`"INACTIVE"`; there's **no DELETE endpoint anywhere in this group** — `POST /{id}/status` (an explicit target, not a blind toggle) is the only way to retire a row; icon uploads (Industries/Designations/Skills only) are always a separate `PUT`/`DELETE /{id}/image` pair, never part of the create/update body.
+
+#### Departments (`department.*`)
+
+| Method & path | Body | Success (200) | Notes |
+|---|---|---|---|
+| `GET /departments` | — | `DepartmentDto[]` | `department.view` |
+| `GET /departments/{id}` | — | `DepartmentDto` | `department.view` |
+| `POST /departments` | `{name}` | `DepartmentDto` | `department.create`. `409 CONFLICT` on duplicate name |
+| `PUT /departments/{id}` | `{name}` | `DepartmentDto` | `department.edit` |
+| `POST /departments/{id}/status` | `{status}` | `DepartmentDto` | `department.toggle_status` |
+
+`DepartmentDto`: `{id, name, status}`. ATW's internal org structure (which team a staff member belongs to) — unrelated to Industries below.
+
+#### Industries (`industry.*`)
+
+| Method & path | Body | Success (200) | Notes |
+|---|---|---|---|
+| `GET /industries` | — | `IndustryDto[]` | `industry.view`. `imageUrl` always `null` on list — see Notes below |
+| `GET /industries/{id}` | — | `IndustryDto` | `industry.view`. Resolves a real `imageUrl` here |
+| `POST /industries` | `{name, code}` | `IndustryDto` | `industry.create`. `409 CONFLICT` on duplicate name **or** duplicate code |
+| `PUT /industries/{id}` | `{name, code}` | `IndustryDto` | `industry.edit`. Same conflict rules |
+| `POST /industries/{id}/status` | `{status}` | `IndustryDto` | `industry.toggle_status` |
+| `PUT /industries/{id}/image` | multipart, field `file` | `IndustryDto` | `industry.edit`. See image rules below |
+| `DELETE /industries/{id}/image` | — | `IndustryDto` | `industry.edit`. Not an error if there was no image |
+
+`IndustryDto`: `{id, name, code, status, imageUrl}`.
+
+**Icon upload rules (identical for Industries/Designations/Skills):** allowed content types are **`image/png`, `image/jpeg`, `image/webp` only** — `image/svg+xml` is deliberately excluded (an SVG can embed `<script>` and would be re-served as-is, a stored-XSS risk). Max **2MB**. The declared `Content-Type` is cross-checked against the file's actual leading bytes — a mismatch is `400 VALIDATION_ERROR` ("File content does not match declared content type..."), not silently trusted. Uploading when an image already exists replaces it. `imageUrl` is a short-lived (~15 min) signed URL — re-fetch via `GET /{id}` rather than caching it; **list endpoints never resolve it** (always `null`), for performance — only `GET /{id}` does.
+
+#### Designations (`designation.*`)
+
+| Method & path | Body | Success (200) | Notes |
+|---|---|---|---|
+| `GET /designations?industryId=` | — | `DesignationDto[]` | `designation.view`. `industryId` filter optional |
+| `GET /designations/{id}` | — | `DesignationDto` | `designation.view` |
+| `POST /designations` | `{name, industryIds[], skillCategoryId?}` | `DesignationDto` | `designation.create`. `industryIds` must have **≥1** entry — `400 VALIDATION_ERROR` "At least one industry must be selected." if empty. `409 CONFLICT` on duplicate name. |
+| `PUT /designations/{id}` | `{name, industryIds[]}` | `DesignationDto` | `designation.edit`. **No `skillCategoryId` field** — see Notes below |
+| `POST /designations/{id}/status` | `{status}` | `DesignationDto` | `designation.toggle_status` |
+| `PUT /designations/{id}/image`, `DELETE /designations/{id}/image` | — | `DesignationDto` | `designation.edit`. Same rules as Industries |
+| `PUT /designations/{id}/skill-category` | `{skillCategoryId}` | `DesignationDto` | `designation.edit`. `skillCategoryId` required here (unlike on Create) |
+| `DELETE /designations/{id}/skill-category` | — | `DesignationDto` | `designation.edit`. Clears it to `null` |
+
+`DesignationDto`: `{id, name, status, imageUrl, industries: IndustrySummary[], skillCategoryId}`, `IndustrySummary`: `{id, name, code}`.
+
+A job title a vacancy is posted under. `skillCategoryId` is optional and used purely for minimum-wage resolution. **It's a dedicated assign/clear endpoint, not part of Update, on purpose** — otherwise a caller updating just the name/industries, without thinking to re-send a previously-assigned `skillCategoryId`, would silently wipe it back to `null`.
+
+#### Skills (`skill.*`)
+
+| Method & path | Body | Success (200) | Notes |
+|---|---|---|---|
+| `GET /skills?designationId=` | — | `SkillDto[]` | `skill.view`. `designationId` filter optional |
+| `GET /skills/{id}` | — | `SkillDto` | `skill.view` |
+| `POST /skills` | `{name, designationId}` | `SkillDto` | `skill.create`. `409 CONFLICT` on duplicate name **scoped to that designation only** — see Notes |
+| `PUT /skills/{id}` | `{name, designationId}` | `SkillDto` | `skill.edit`. Changing `designationId` moves the skill |
+| `POST /skills/{id}/status` | `{status}` | `SkillDto` | `skill.toggle_status` |
+| `PUT /skills/{id}/image`, `DELETE /skills/{id}/image` | — | `SkillDto` | `skill.edit`. Same rules as Industries |
+
+`SkillDto`: `{id, name, designationId, status, imageUrl}`.
+
+**Uniqueness is per-designation, not global** — unlike every other name-uniqueness rule in this module, the same skill name can legitimately exist under two different designations.
+
+#### Skill Categories (`skill_category.*`)
+
+| Method & path | Body | Success (200) | Notes |
+|---|---|---|---|
+| `GET /skill-categories` | — | `SkillCategoryDto[]` | `skill_category.view` |
+| `GET /skill-categories/{id}` | — | `SkillCategoryDto` | `skill_category.view` |
+| `POST /skill-categories` | `{name, code}` | `SkillCategoryDto` | `skill_category.create`. `409 CONFLICT` on duplicate name or code |
+| `PUT /skill-categories/{id}` | `{name, code}` | `SkillCategoryDto` | `skill_category.edit` |
+| `POST /skill-categories/{id}/status` | `{status}` | `SkillCategoryDto` | `skill_category.toggle_status` |
+
+`SkillCategoryDto`: `{id, name, code, status}`. Purely a minimum-wage grouping (e.g. "Skilled", "Unskilled") — not part of the industry/designation/skill chain itself.
+
+#### Minimum Wage Rates (`minimum_wage.*`)
+
+The statutory minimum daily wage for a (state, skill category) pair — **effective-dated and immutable**. A rate change is always a brand-new row with its own `effectiveFrom`; there is **no edit endpoint for the rate value at all**, only create (a new version), a status toggle, and reads. This is the one resource in the whole Masterdata module that's paginated (it's append-only and grows without bound), and the one DTO that denormalizes human-readable names alongside ids.
+
+| Method & path | Body | Success (200) | Notes |
+|---|---|---|---|
+| `GET /minimum-wage-rates?stateId=&skillCategoryId=&page=&size=&sort=` | — | `PageResponse<MinimumWageRateDto>` | `minimum_wage.view`. Both filters optional. Default sort `effectiveFrom,desc` |
+| `GET /minimum-wage-rates/{id}` | — | `MinimumWageRateDto` | `minimum_wage.view` |
+| `GET /minimum-wage-rates/effective?stateId=&skillCategoryId=&asOf=` | — | `MinimumWageRateDto` | `minimum_wage.view`. `asOf` (ISO date) optional, defaults to today **in IST**. Resolves whichever version was/is actually in force on that date. `404 RESOURCE_NOT_FOUND` if nothing was configured yet as of that date |
+| `POST /minimum-wage-rates` | `{stateId, skillCategoryId, minDailyRate, effectiveFrom}` | `MinimumWageRateDto` | `minimum_wage.create`. **`409 CONFLICT`** if an ACTIVE version already exists for that exact (state, category, effectiveFrom) — deactivate it first if correcting a mistake, then re-create; a deactivated row's date can be reused |
+| `POST /minimum-wage-rates/{id}/status` | `{status}` | `MinimumWageRateDto` | `minimum_wage.toggle_status`. The **only** way to retract/correct a wrongly-entered rate |
+
+`MinimumWageRateDto`: `{id, stateId, stateName, skillCategoryId, skillCategoryName, minDailyRate, effectiveFrom, status}`.
 
 ### Health — public
 
@@ -310,3 +413,9 @@ Staff role assignment (`POST`/`PUT /api/v1/admin/staff`) has the identical "can'
   elsewhere," not "token just expired."
 - `resend-otp` now actually invalidates the previous challenge immediately (it used to still work
   briefly after a resend) and now has a total-resend cap it didn't have before.
+- New: **Masterdata** (`/api/v1/masterdata/**` for public geography dropdowns, and
+  `/api/v1/admin/masterdata/**` for Departments/Industries/Designations/Skills/Skill Categories/
+  Minimum Wage Rates admin CRUD) — see §4. Also new: **`GET`/`PUT /api/v1/admin/staff/{id}/address`**,
+  split out of the staff profile. If you integrated against the old profile shape, update any call
+  site expecting `addressLine`/`pincode` on `AdminUserProfileDto` — those two fields were removed from
+  profile and now live on the new address sub-resource with real `stateId`/`cityId` foreign keys.

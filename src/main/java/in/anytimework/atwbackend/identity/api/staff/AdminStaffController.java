@@ -1,15 +1,18 @@
 package in.anytimework.atwbackend.identity.api.staff;
 
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserProfileDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.CreateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAddressRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateBankDetailRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateKycRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateProfileRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAdminStaffStatusRequest;
+import in.anytimework.atwbackend.identity.application.AdminStaffAddressService;
 import in.anytimework.atwbackend.identity.application.AdminStaffBankDetailService;
 import in.anytimework.atwbackend.identity.application.AdminStaffKycService;
 import in.anytimework.atwbackend.identity.application.AdminStaffProfileService;
@@ -45,13 +48,16 @@ public class AdminStaffController {
 
     private final AdminStaffService staffService;
     private final AdminStaffProfileService profileService;
+    private final AdminStaffAddressService addressService;
     private final AdminStaffKycService kycService;
     private final AdminStaffBankDetailService bankDetailService;
 
     public AdminStaffController(AdminStaffService staffService, AdminStaffProfileService profileService,
-                           AdminStaffKycService kycService, AdminStaffBankDetailService bankDetailService) {
+                           AdminStaffAddressService addressService, AdminStaffKycService kycService,
+                           AdminStaffBankDetailService bankDetailService) {
         this.staffService = staffService;
         this.profileService = profileService;
+        this.addressService = addressService;
         this.kycService = kycService;
         this.bankDetailService = bankDetailService;
     }
@@ -108,6 +114,19 @@ public class AdminStaffController {
     public ApiResponse<AdminUserProfileDto> updateProfile(@PathVariable UUID id, @Valid @RequestBody UpdateProfileRequest request,
                                                            HttpServletRequest http) {
         return ApiResponse.ok(profileService.update(id, request, HttpRequests.clientIp(http), HttpRequests.userAgent(http)));
+    }
+
+    @GetMapping("/{id}/address")
+    @PreAuthorize("@authz.has('admin_staff.view')")
+    public ApiResponse<AdminUserAddressDto> getAddress(@PathVariable UUID id) {
+        return ApiResponse.ok(addressService.get(id));
+    }
+
+    @PutMapping("/{id}/address")
+    @PreAuthorize("@authz.has('admin_staff.edit')")
+    public ApiResponse<AdminUserAddressDto> updateAddress(@PathVariable UUID id, @Valid @RequestBody UpdateAddressRequest request,
+                                                           HttpServletRequest http) {
+        return ApiResponse.ok(addressService.update(id, request, HttpRequests.clientIp(http), HttpRequests.userAgent(http)));
     }
 
     /** admin_staff.view alone returns masked values; admin_staff.view_kyc (Senior/Junior Developer only) sees them unmasked. */

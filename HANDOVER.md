@@ -1,9 +1,11 @@
 # ATW Backend — Azure Deployment Handover
 
-The real ATW admin backend: authentication (password + email OTP 2FA), account self-service, and
-role/permission management, backed by PostgreSQL (via Flyway) and Redis. The original throwaway
-`testapi` pipe-cleaner code referenced in earlier versions of this doc is gone — this now documents
-the real API and its real security requirements.
+The real ATW admin backend: authentication (password + email OTP 2FA), account self-service,
+role/permission management, staff address/KYC/bank-detail records, and workforce/geography reference
+data (states, districts, departments, industries, designations, skills, skill categories, and
+effective-dated statutory minimum wage rates) — backed by PostgreSQL (via Flyway), Redis, and Azure
+Blob Storage. The original throwaway `testapi` pipe-cleaner code referenced in earlier versions of
+this doc is gone — this now documents the real API and its real security requirements.
 
 ---
 
@@ -31,7 +33,10 @@ Packaging produces a single executable jar: `target/atw-backend-0.0.1-SNAPSHOT.j
 4. **Azure Container Apps** (recommended) or **App Service for Containers** — to run the image.
 5. **Networking** — the container must reach the DB and Cache: allow it through their firewalls
    (private endpoint / VNet integration, or "Allow Azure services" for a quick test).
-6. **(Optional) Azure Blob Storage** — for document uploads. Local dev uses Azurite; in Azure, set
+6. **Azure Blob Storage** — backs two features: staff KYC/profile document uploads (the `document`
+   module) and masterdata icon uploads for industries/designations/skills. Building the blob client
+   makes no network call, so **the app still boots without it reachable** — only those specific
+   upload/download endpoints fail until it's configured. Local dev uses Azurite; in Azure, set
    `AZURE_STORAGE_ENDPOINT` and leave the connection string empty so managed identity is used
    (`azure-identity` is already a dependency).
 7. **(Optional) Azure Communication Services or SMTP** — for outbound email (OTP codes, password
@@ -194,6 +199,17 @@ matching Java classes (`StaffService` → `AdminStaffService`, `Role` → `Admin
 `admin_user*` and API URLs (`/api/v1/admin/staff`, `/api/v1/admin/roles`) were already unambiguous
 and are unchanged.
 
+Migrations V17–V21 added the new `masterdata` module's reference data: `state`/`city` (V17 — all 36
+states/UTs seeded; `city` left empty pending a real district import rather than hand-typed), a
+structured, encrypted `admin_user_address` table replacing the free-text `address_line`/`pincode`
+columns dropped from `admin_user_profile` (V18), `department`/`industry`/`designation`/`skill` plus
+the `designation_industry` join table and new `department.*` permission rows — `industry.*`/
+`designation.*`/`skill.*` already existed in the legacy permission seed, confirmed by query before
+writing the migration to avoid a duplicate-insert (V19), `skill_category` and the effective-dated,
+immutable `minimum_wage_rate` table plus the `designation.skill_category_id` link (V20), and a real
+784-district seed of the `city` table sourced from `igod.gov.in` data, replacing the deliberately
+empty V17 table (V21).
+
 ---
 
 ## 7. Validate the deployment (smoke test)
@@ -252,6 +268,12 @@ dockerized Postgres/Redis/the app itself — see §9) and produces exactly the r
 - **Staff KYC numbers and bank account numbers are encrypted at rest** (AES-256-GCM, a fresh random
   IV per value) and masked in every API response unless the caller holds the narrower
   `admin_staff.view_kyc` / `admin_staff.view_bank_details` permission.
+- **Masterdata icon uploads (industry/designation/skill) get the same scrutiny as any other file
+  upload** — PNG/JPEG/WEBP only (SVG is deliberately excluded: it can embed `<script>` and would be
+  served back to a browser that opens the image URL directly), a 2MB cap, and the actual file bytes
+  are checked against a magic-byte signature rather than trusting the declared `Content-Type` header.
+  Gated by the same per-resource RBAC as the rest of masterdata (`industry.edit` / `designation.edit`
+  / `skill.edit`), not reachable by just any authenticated caller.
 - **Access tokens can be revoked before they expire.** Each admin carries a `securityVersion`; a
   password change/reset or account disable bumps it, and every authenticated request checks the
   token's version against the live value — so a stolen/leaked token stops working immediately, not
@@ -323,6 +345,9 @@ quirk, unrelated to the app or to how Azure's build pipeline will behave.
 - **Java 25 is relatively new** — ensure the Temurin 25 base images are pullable in your registry/
   environment.
 - No HTTPS/TLS termination is handled by the app; terminate TLS at the Azure ingress.
+- **Business-date calculations (e.g. minimum-wage effective-dating) use `Asia/Kolkata` explicitly**
+  (`ClockConfig`), independent of the container host's or JVM's default timezone — no `TZ` env var is
+  needed for "today" to resolve correctly against Indian statutory dates.
 - See **FRONTEND_HANDOVER.md** for the complete API reference (every endpoint, every error code) and
   **postman/** for a ready-to-import Postman collection — both are kept current as the API evolves,
   ready for whenever the frontend handover happens; no frontend team has received them yet, so there
