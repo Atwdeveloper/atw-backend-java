@@ -3,18 +3,21 @@ package in.anytimework.atwbackend.identity;
 import in.anytimework.atwbackend.identity.api.role.dto.CreateAdminRoleRequest;
 import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleDto;
 import in.anytimework.atwbackend.identity.api.role.dto.UpdateAdminRoleRequest;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserProfileDto;
 import in.anytimework.atwbackend.identity.api.staff.dto.CreateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminRoleRef;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAddressRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateBankDetailRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateKycRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateProfileRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.application.AuthService;
 import in.anytimework.atwbackend.identity.application.AdminRoleService;
+import in.anytimework.atwbackend.identity.application.AdminStaffAddressService;
 import in.anytimework.atwbackend.identity.application.AdminStaffBankDetailService;
 import in.anytimework.atwbackend.identity.application.AdminStaffKycService;
 import in.anytimework.atwbackend.identity.application.AdminStaffProfileService;
@@ -27,6 +30,10 @@ import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
 import in.anytimework.atwbackend.identity.domain.Gender;
 import in.anytimework.atwbackend.identity.domain.AdminRole;
 import in.anytimework.atwbackend.identity.domain.AdminRoleRepository;
+import in.anytimework.atwbackend.masterdata.domain.City;
+import in.anytimework.atwbackend.masterdata.domain.CityRepository;
+import in.anytimework.atwbackend.masterdata.domain.State;
+import in.anytimework.atwbackend.masterdata.domain.StateRepository;
 import in.anytimework.atwbackend.notification.CapturingEmailSender;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
@@ -79,6 +86,8 @@ class AdminStaffRoleIntegrationTest {
     @Autowired
     private AdminStaffProfileService staffProfileService;
     @Autowired
+    private AdminStaffAddressService staffAddressService;
+    @Autowired
     private AdminStaffKycService staffKycService;
     @Autowired
     private AdminStaffBankDetailService staffBankDetailService;
@@ -88,6 +97,10 @@ class AdminStaffRoleIntegrationTest {
     private AdminUserRepository adminUsers;
     @Autowired
     private AdminRoleRepository roles;
+    @Autowired
+    private StateRepository states;
+    @Autowired
+    private CityRepository cities;
     @Autowired
     private PasswordEncoder passwordEncoder;
     @Autowired
@@ -336,14 +349,65 @@ class AdminStaffRoleIntegrationTest {
         AdminStaffDto staff = createStaffAsSuperAdmin("Profile Target", List.of());
 
         AdminUserProfileDto updated = staffProfileService.update(staff.id(),
-                new UpdateProfileRequest(LocalDate.of(1995, 6, 15), Gender.FEMALE, "221B Baker Street", "560001"),
-                "127.0.0.1", "JUnit");
+                new UpdateProfileRequest(LocalDate.of(1995, 6, 15), Gender.FEMALE), "127.0.0.1", "JUnit");
         assertThat(updated.dateOfBirth()).isEqualTo(LocalDate.of(1995, 6, 15));
 
         AdminUserProfileDto fetched = staffProfileService.get(staff.id());
         assertThat(fetched.gender()).isEqualTo(Gender.FEMALE);
-        assertThat(fetched.addressLine()).isEqualTo("221B Baker Street");
-        assertThat(fetched.pincode()).isEqualTo("560001");
+    }
+
+    private City createTestCity() {
+        State rajasthan = states.findAll().stream()
+                .filter(s -> s.getCode().equals("RJ")).findFirst().orElseThrow();
+        return cities.save(new City(rajasthan.getId(), "Jaipur " + unique()));
+    }
+
+    @Test
+    void staffAddress_updateThenGet_roundTrips() {
+        AdminStaffDto staff = createStaffAsSuperAdmin("Address Target", List.of());
+        City jaipur = createTestCity();
+
+        AdminUserAddressDto updated = staffAddressService.update(staff.id(),
+                new UpdateAddressRequest("221B Baker Street", "Near City Park", jaipur.getStateId(), jaipur.getId(), "302001"),
+                "127.0.0.1", "JUnit");
+        assertThat(updated.line1()).isEqualTo("221B Baker Street");
+        assertThat(updated.cityId()).isEqualTo(jaipur.getId());
+
+        AdminUserAddressDto fetched = staffAddressService.get(staff.id());
+        assertThat(fetched.line1()).isEqualTo("221B Baker Street");
+        assertThat(fetched.line2()).isEqualTo("Near City Park");
+        assertThat(fetched.stateId()).isEqualTo(jaipur.getStateId());
+        assertThat(fetched.pincode()).isEqualTo("302001");
+    }
+
+    @Test
+    void staffAddress_line1IsEncryptedAtRest() {
+        AdminStaffDto target = createStaffAsSuperAdmin("Address Encryption Target", List.of());
+
+        staffAddressService.update(target.id(),
+                new UpdateAddressRequest("42 Residency Road", null, null, null, null), "127.0.0.1", "JUnit");
+
+        String rawStored = jdbcTemplate.queryForObject(
+                "select line1 from admin_user_address where admin_user_id = ?", String.class, target.id());
+        assertThat(rawStored).isNotEqualTo("42 Residency Road").doesNotContain("Residency");
+    }
+
+    @Test
+    void updateAddress_withUnknownState_isRejected() {
+        AdminStaffDto target = createStaffAsSuperAdmin("Bad State Target", List.of());
+
+        assertThatThrownBy(() -> staffAddressService.update(target.id(),
+                new UpdateAddressRequest(null, null, UUID.randomUUID(), null, null), "127.0.0.1", "JUnit"))
+                .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void updateAddress_onSuperAdminTarget_isRejected() {
+        UUID superAdminId = createSuperAdminActor();
+
+        assertThatThrownBy(() -> staffAddressService.update(superAdminId,
+                new UpdateAddressRequest("Somewhere", null, null, null, null), "127.0.0.1", "JUnit"))
+                .isInstanceOf(BusinessRuleException.class);
     }
 
     @Test
@@ -403,7 +467,7 @@ class AdminStaffRoleIntegrationTest {
         UUID superAdminId = createSuperAdminActor();
 
         assertThatThrownBy(() -> staffProfileService.update(superAdminId,
-                new UpdateProfileRequest(null, null, "Somewhere", null), "127.0.0.1", "JUnit"))
+                new UpdateProfileRequest(null, null), "127.0.0.1", "JUnit"))
                 .isInstanceOf(BusinessRuleException.class);
     }
 
