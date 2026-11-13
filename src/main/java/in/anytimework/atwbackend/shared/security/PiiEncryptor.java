@@ -1,7 +1,5 @@
 package in.anytimework.atwbackend.shared.security;
 
-import org.springframework.stereotype.Component;
-
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -11,13 +9,16 @@ import java.security.SecureRandom;
 import java.util.Base64;
 
 /**
- * AES-256-GCM encryption for PII stored at rest (used by {@link EncryptedStringConverter}). Each
- * value gets a fresh random 12-byte IV, stored alongside the ciphertext (the IV is not secret -
- * GCM's security relies on IV uniqueness per key, not IV secrecy). Output is
- * {@code base64(iv || ciphertext || authTag)}; GCM mode appends the tag to the ciphertext
- * automatically.
+ * AES-256-GCM encryption for PII stored at rest (used by {@link EncryptedStringConverter} and
+ * {@link WorkerEncryptedStringConverter}). Each value gets a fresh random 12-byte IV, stored
+ * alongside the ciphertext (the IV is not secret - GCM's security relies on IV uniqueness per key,
+ * not IV secrecy). Output is {@code base64(iv || ciphertext || authTag)}; GCM mode appends the tag
+ * to the ciphertext automatically.
+ *
+ * <p>Plain class, not a {@code @Component}: two independently-keyed instances exist side by side
+ * (platform-staff PII vs. worker PII - see {@link PiiEncryptionConfig}), so each is built from an
+ * explicit {@code @Bean} method rather than Spring constructing a single instance automatically.</p>
  */
-@Component
 public class PiiEncryptor {
 
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
@@ -28,10 +29,15 @@ public class PiiEncryptor {
     private final SecretKeySpec key;
     private final SecureRandom random = new SecureRandom();
 
-    public PiiEncryptor(PiiEncryptionProperties properties) {
-        byte[] keyBytes = Base64.getDecoder().decode(properties.key());
+    /**
+     * @param base64Key   the AES-256 key, base64-encoded (must decode to exactly 32 bytes)
+     * @param propertyName the config property this came from, used only to make a decode failure
+     *                     actionable (e.g. {@code "atw.security.pii-encryption.key"})
+     */
+    public PiiEncryptor(String base64Key, String propertyName) {
+        byte[] keyBytes = Base64.getDecoder().decode(base64Key);
         if (keyBytes.length != KEY_LENGTH_BYTES) {
-            throw new IllegalStateException("atw.security.pii-encryption.key must decode to exactly "
+            throw new IllegalStateException(propertyName + " must decode to exactly "
                     + KEY_LENGTH_BYTES + " bytes (AES-256); got " + keyBytes.length);
         }
         this.key = new SecretKeySpec(keyBytes, "AES");

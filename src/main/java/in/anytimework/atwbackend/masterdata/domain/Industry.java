@@ -44,9 +44,9 @@ public class Industry extends BaseEntity {
         this.status = ActiveStatus.ACTIVE;
     }
 
-    public void rename(String name, String code) {
+    /** Name only - {@code code} is assigned once at creation and never changes thereafter. */
+    public void rename(String name) {
         this.name = name;
-        this.code = code;
     }
 
     public void activate() {

@@ -105,7 +105,7 @@ actual smoke test (§7).
 | `ADMIN_OTP_ENABLED` | `true` | 2FA on login. Leave on. |
 | `ADMIN_OTP_MAX_ATTEMPTS` | `5` | Wrong-code attempts before a challenge is locked out |
 | `ADMIN_OTP_MAX_RESENDS` | `3` | Resends allowed per login attempt before it must restart |
-| `ADMIN_MAX_FAILED_LOGINS` / `ADMIN_LOCKOUT_DURATION` | `5` / `PT15M` | Password-attempt lockout |
+| `ADMIN_MAX_FAILED_LOGINS` / `ADMIN_LOCKOUT_DURATION` | `5` / `PT15M` | **No longer enforced** — account-level lockout was removed in favor of the per-IP rate limit below + mandatory OTP. Safe to leave unset or set; it's inert either way. |
 | `ADMIN_RATE_LIMIT_ENABLED` / `_MAX_ATTEMPTS` / `_WINDOW` | `true` / `10` / `PT1M` | Per-IP request cap on login/forgot-password/reset-password/accept-invite (Redis-backed, holds across replicas) |
 | `ADMIN_OTP_IN_RESPONSE` | `false` | Test-only: puts the OTP directly in the login/resend-otp response instead of only emailing it. **Refused at startup outside local/test** — see §8. |
 | `ADMIN_FIXED_OTP` | *(unset)* | Pre-SMTP dev-slot-only: every issued OTP (login + resend) is this fixed value instead of a random code, so you can log in by typing a known code instead of reading logs/email. Must be exactly `ADMIN_OTP_LENGTH` numeric digits. **Refused at startup unless `SPRING_PROFILES_ACTIVE` includes `dev`** — see §8. |
@@ -349,6 +349,8 @@ quirk, unrelated to the app or to how Azure's build pipeline will behave.
   (`ClockConfig`), independent of the container host's or JVM's default timezone — no `TZ` env var is
   needed for "today" to resolve correctly against Indian statutory dates.
 - See **FRONTEND_HANDOVER.md** for the complete API reference (every endpoint, every error code) and
-  **postman/** for a ready-to-import Postman collection — both are kept current as the API evolves,
-  ready for whenever the frontend handover happens; no frontend team has received them yet, so there
-  is no live consumer depending on the pre-rename `staff.*`/`roles.*` permission codes.
+  **postman/** for four ready-to-import Postman collections, split by module (Auth & Account, RBAC &
+  Staff, Masterdata, Health) rather than bundled into one file — both are kept current as the API
+  evolves. The frontend dev has already integrated against Auth & Account and RBAC & Staff; keep the
+  pre-rename `staff.*`/`roles.*` permission codes in mind as a real, not just theoretical, compatibility
+  concern if either of those is ever touched again.

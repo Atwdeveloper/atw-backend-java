@@ -24,10 +24,11 @@ class NotificationServiceImplTest {
     private final EmailTemplateRepository templates = mock(EmailTemplateRepository.class);
     private final TemplateRenderer renderer = mock(TemplateRenderer.class);
     private final EmailSender emailSender = mock(EmailSender.class);
+    private final SmsSender smsSender = mock(SmsSender.class);
     private final NotificationLogWriter logWriter = mock(NotificationLogWriter.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final NotificationServiceImpl service =
-            new NotificationServiceImpl(templates, renderer, emailSender, logWriter, events);
+            new NotificationServiceImpl(templates, renderer, emailSender, smsSender, logWriter, events);
 
     private EmailTemplate welcomeTemplate() {
         return new EmailTemplate("WELCOME", "Hi [(${name})]", "<p>[[${name}]]</p>", "en", true, null);
@@ -80,5 +81,20 @@ class NotificationServiceImplTest {
         service.enqueue(command);
 
         verify(events).publishEvent(new EmailRequestedEvent(command));
+    }
+
+    @Test
+    void sendSms_delegatesToTheConfiguredSender() {
+        service.sendSms("9876543210", "Your code is 123456");
+
+        verify(smsSender).send(new SmsMessage("9876543210", "Your code is 123456"));
+    }
+
+    @Test
+    void sendSms_whenSenderFails_wrapsAsBusinessRuleException() {
+        when(smsSender.send(any())).thenThrow(new RuntimeException("provider down"));
+
+        assertThatThrownBy(() -> service.sendSms("9876543210", "Your code is 123456"))
+                .isInstanceOf(BusinessRuleException.class);
     }
 }

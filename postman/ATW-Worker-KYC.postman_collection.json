@@ -1,0 +1,981 @@
+{
+  "info": {
+    "name": "ATW Backend — Worker KYC",
+    "description": "Worker identity verification for the \"add worker via Aadhaar\" flow: a mobile-OTP + live Aadhaar e-KYC wizard that pulls UIDAI-sourced identity details straight into worker creation, plus a manual, unverified fallback for recording a declared Aadhaar/PAN number when e-KYC isn't used or doesn't succeed.\n\n**This is worker KYC - a gig worker's own identity documents.** It is unrelated to *admin staff's* own KYC numbers (Aadhaar/PAN/UAN/PF/ESIC), a separate feature covered by **ATW-RBAC-Staff.postman_collection.json**. The two happen to share the word \"KYC\" and nothing else - different tables, different permissions, different controllers; see the Worker KYC folder description below for the full contrast.\n\nTwo controllers, two folders:\n- **Worker Intake (Aadhaar e-KYC)** - the 4-step wizard behind `AdminWorkerIntakeController`: send/verify a mobile OTP, then send/verify a live Aadhaar e-KYC OTP. Gated by `workers.create`.\n- **Worker KYC** - behind `AdminWorkerKycController`: view a worker's KYC profile, and manually record an Aadhaar/PAN number as an unverified fallback. Gated by `kyc.*` permissions.\n\n**Run order:** This collection cannot create a worker by itself - that is `POST /api/v1/admin/workers` in the separate **ATW-Worker** collection (written concurrently with this one; not necessarily published alongside it). Run Worker Intake's four requests top to bottom to obtain a `{{verificationId}}`; optionally hand that to ATW-Worker's Create Worker request as `aadhaarVerificationId` to auto-verify the new worker on creation. Then run Worker KYC's requests against the resulting `{{workerId}}` - or equally against any worker created the plain manual way (no Aadhaar verification at all), since Worker KYC does not depend on anything in the Worker Intake folder.\n\n**Shared conventions across every request in this collection:**\n- Every Aadhaar/PAN number returned in a response is **masked** to its last 4 characters (e.g. `\"********2346\"`) unless the caller also holds `kyc.view_sensitive` - the example responses below show the masked form, which is what almost every caller will see.\n- Both \"send OTP\" requests (mobile and Aadhaar) share one rate-limiting shape: max 3 sends per subject **and** max 10 sends per client IP, both counted over a rolling 10-minute window in Redis. Hitting either returns the identical `422 BUSINESS_RULE_VIOLATION`, \"Too many attempts. Please try again later.\" - a different mechanism from the `429 RATE_LIMITED` code in the shared error table below, which is specific to the 6 public auth endpoints.\n- The Aadhaar e-KYC provider is swappable via `atw.aadhaar-kyc.provider` (default `stub`). The bundled local stub only ever accepts the OTP `\"123456\"` and returns the same fixed, canned identity every time - deterministic on purpose, for reproducible local testing; this collection's examples reflect it.\n- For mobile OTP, the 6-digit code is **never returned by the API** in local/dev - read it from the application console (`[DEV SMS] to='...'`) instead.\n\nFor admin login/2FA, see **ATW-Auth-Account.postman_collection.json**; for Geography lookups (`stateId`/`cityId`), see **ATW-Masterdata.postman_collection.json**.\n\n## Running this collection\n\nSelect the **ATW Backend - Local** environment first; every request here needs `{{accessToken}}` (run Login / Verify OTP from **ATW-Auth-Account.postman_collection.json**) plus its own permission noted on each request below.\n\n1. **Worker Intake (Aadhaar e-KYC)** has no dependency on anything outside this collection. Run its four requests top to bottom: **Send Mobile OTP** saves `{{mobileOtpId}}`, consumed by **Verify Mobile OTP**; **Send Aadhaar OTP** saves `{{verificationId}}`, consumed by **Verify Aadhaar OTP**. The two pairs are independent of each other (not cryptographically chained) - run either pair alone, or in either order.\n2. The `{{verificationId}}` **Verify Aadhaar OTP** returns is only useful once handed to `POST /api/v1/admin/workers` (`aadhaarVerificationId`) in the **ATW-Worker** collection (written concurrently with this one) - that call is what actually turns it into a VERIFIED worker. This collection does not itself create a worker.\n3. **Worker KYC** needs an existing `{{workerId}}` - set it from any already-created worker (verified-via-Aadhaar or fully manual), typically saved by ATW-Worker's own Create Worker request. **Get KYC Profile** has no further dependency; **Submit Aadhaar (Manual)** / **Submit PAN (Manual)** likewise just need `{{workerId}}` - none of the three depend on the Worker Intake folder above.\n\nEvery endpoint is versioned under `/api/v1/` and returns the same envelope:\n\n```\n{ \"success\": boolean, \"data\": <payload> | null, \"error\": <ApiError> | null }\n```\n\n`ApiError` shape: `{\"code\": string, \"message\": string, \"fieldErrors\": [{\"field\",\"message\"}] | null, \"timestamp\": ISO-8601 string, \"traceId\": string | null}`. `fieldErrors` is populated only for `VALIDATION_ERROR` responses that came from `@Valid` request-body validation; it's `null`/omitted for every other error, including other `VALIDATION_ERROR` responses raised programmatically (e.g. \"Unknown permission code(s)\"). `traceId` echoes the `X-Correlation-Id` request header when present — include it when reporting a bug.\n\n## Error codes that can appear on (almost) any endpoint\n\nThese are produced centrally — by `GlobalExceptionHandler`, by Spring Security's entry point / access-denied handler, or by the two security filters that run before a controller is even reached — so they are **not** re-documented on every individual request below; only an endpoint's *specific* codes and triggers are. Two pairs are easy to confuse and worth reading carefully:\n\n| Code | HTTP | Meaning |\n|---|---|---|\n| `VALIDATION_ERROR` | 400 | A `@Valid` request-body field failed Bean Validation (`fieldErrors[]` present), or a service-level input check failed (no `fieldErrors`). |\n| `MALFORMED_REQUEST` | 400 | Request body is missing or isn't valid JSON. |\n| `UNSUPPORTED_MEDIA_TYPE` | 415 | `Content-Type` isn't `application/json`. |\n| `UNAUTHENTICATED` | 401 | **No bearer token was presented at all**, or it's malformed/expired/signature-invalid. Produced by Spring Security itself, before any controller runs. |\n| `UNAUTHORIZED` | 401 | A **business-level** auth failure on an endpoint that doesn't require a token in the first place — bad login credentials, a locked/disabled account, an invalid refresh/reset/invite token. Same HTTP status as `UNAUTHENTICATED` above, different meaning: this means \"the token/credential you supplied is bad\", not \"you supplied nothing\". |\n| `SESSION_REVOKED` | 401 | The bearer token parses fine, but the admin's `security_version` has moved on since it was issued (password changed/reset, or their role assignment changed), or the account is no longer `ACTIVE`. The client must discard tokens and log in again — refreshing won't help, the refresh token was revoked too. |\n| `MUST_CHANGE_PASSWORD` | 403 | Authenticated, but the token's `mustChangePassword` flag is set and this isn't `/admin/account/me` or `/admin/account/change-password`. |\n| `ACCESS_DENIED` | 403 | Authenticated, but lacking the specific permission the endpoint requires. |\n| `RATE_LIMITED` | 429 | Too many requests to one of the 6 public, abuse-prone auth endpoints from the same IP within the window — default 10 requests/60s, **per endpoint**, not pooled across them. |\n| `NOT_FOUND` | 404 | The **URL itself** doesn't match any endpoint (a routing miss — typo'd path, wrong version prefix, etc). |\n| `RESOURCE_NOT_FOUND` | 404 | The URL is valid, but the specific id in it (a staff id, role id, ...) doesn't exist. Different from `NOT_FOUND` above — don't conflate \"no such route\" with \"no such record\". |\n| `METHOD_NOT_ALLOWED` | 405 | Right URL, wrong HTTP verb. |\n| `BUSINESS_RULE_VIOLATION` | 422 | Input is syntactically well-formed but violates a business rule (e.g. \"system roles cannot be modified\", a privilege-escalation attempt, self/super-admin protection). |\n| `CONFLICT` | 409 | Either an endpoint's own duplicate check (most common — a friendlier, specific message), or a generic last-resort safety net when a unique-constraint violation reaches the database despite an earlier application-level check passing (a genuine race between two concurrent requests) — that fallback case always carries the same generic message, regardless of which field collided. |\n| `INTERNAL_ERROR` | 500 | Unexpected failure. Full detail (stack trace) is logged server-side against the same `traceId` returned to the client; never returned in the response body itself. |\n\n## Documentation cross-references\n\n- **ATW-Auth-Account.postman_collection.json** — login/2FA to obtain `{{accessToken}}`.\n- **ATW-RBAC-Staff.postman_collection.json** — role/permission management, and **admin staff's own** KYC numbers (a different feature from this collection - see the overview above).\n- **ATW-Masterdata.postman_collection.json** — the Geography endpoints Verify Aadhaar OTP's `stateId`/`cityId` are resolved against.\n- `FRONTEND_HANDOVER.md` — does not yet have a Worker / Worker-KYC section as of this writing (2026-11-13); this collection plus this module's controller-level OpenAPI annotations (`/swagger-ui.html`, `/v3/api-docs`) are the authoritative reference until that doc is updated.\n- `HANDOVER.md` — Azure deployment context (Blob Storage for the verified Aadhaar photo via the `document` module, the worker-PII encryption key, Redis for rate limiting).\n- **ATW-Worker** and **ATW-Worker-FaceAuth** — sibling collections covering worker creation/management and a separate biometric face-verification flow, written concurrently with this one; not necessarily published alongside it.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "item": [
+    {
+      "name": "Worker Intake (Aadhaar e-KYC)",
+      "description": "The \"add worker via Aadhaar\" wizard, behind `AdminWorkerIntakeController`: prove control of a mobile number by SMS OTP, then run a live Aadhaar e-KYC OTP verification to pull UIDAI-sourced identity details straight into the create-worker form. Requires `Authorization: Bearer {{accessToken}}` and the **`workers.create`** permission on all four requests - not a `kyc.*` permission, since this is simply the other on-ramp to creating a worker, not a KYC-review action on an existing one.\n\n**The two pairs (mobile, Aadhaar) are deliberately independent, not cryptographically chained** - this is an admin-operated back-office wizard, not public worker self-service, so the UI simply sequencing the two steps is sufficient; you can run either pair alone, in either order.\n\n**Rate limits** apply to both \"send OTP\" requests, identically shaped: max **3 sends per subject** (the mobile number, or the Aadhaar number - HMAC-hashed before use as the limiter key) **and** max **10 sends per client IP**, both counted over a rolling **10-minute** window in Redis. Hitting either returns `422 BUSINESS_RULE_VIOLATION`, \"Too many attempts. Please try again later.\" - note this is a different mechanism from the `429 RATE_LIMITED` code in the shared error table below (that one is specific to the 6 public auth endpoints).\n\n**Aadhaar e-KYC provider** is swappable via `atw.aadhaar-kyc.provider` (default `stub`, and the only provider active in this environment unless someone has explicitly configured the real one). The bundled **stub** never calls a real government-backed API - it only logs what it would have done, always \"succeeds\" on send, and on verify accepts **only the fixed OTP `123456`**, always returning the same canned identity (`\"Stub Verified Worker\"`, DOB 1995-01-01, Delhi / New Delhi, no photo) - deterministic on purpose, for reproducible local testing. A real **`sandbox`** provider (Sandbox.co.in, a live, typically-paid UIDAI e-KYC vendor - the legacy app's own vendor) exists behind the same interface and can genuinely reject requests (unrecognized Aadhaar number, cooldown, provider outage, wrong/expired real OTP) - this collection's examples reflect the stub, which is what local/dev always runs against.\n\n**Local dev tip for mobile OTP:** the 6-digit code is **never returned by this API**. The default dev SMS transport (`atw.sms.provider=log`) only writes it to the application console as `[DEV SMS] to='<number>' Your Anytime Work verification code is <code>...` - read it from there to complete Verify Mobile OTP below.\n\nAn Aadhaar number can only ever be registered to one worker - the duplicate check runs at **Send Aadhaar OTP** time already (failing fast, before spending an OTP), not only later at worker creation.",
+      "item": [
+        {
+          "name": "Send Mobile OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/intake/mobile-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "intake",
+                "mobile-otp"
+              ]
+            },
+            "description": "**Permission:** `workers.create`.\n\nFirst step of the wizard: sends a 6-digit SMS OTP to prove the admin has access to the worker's mobile number.\n\n**Validation**\n- `mobileNumber` - required, non-blank, max 20 chars (no format check beyond length).\n\n**Rate limits** (rolling 10-minute window): max 3 sends per `mobileNumber`, max 10 sends per client IP - see the folder description. OTP expires in 10 minutes; max 5 verify attempts before it must be re-sent (see Verify Mobile OTP).\n\n**Local dev tip:** the code is never echoed back here - check the server console for a `[DEV SMS]` log line (see the folder description).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Blank/>20-char `mobileNumber` | `VALIDATION_ERROR` | 400 |\n| Rate limit exceeded (per-number or per-IP) | `BUSINESS_RULE_VIOLATION` | 422 |\n| The SMS provider itself failed to send | `BUSINESS_RULE_VIOLATION` | 422 |\n\nThis request's Tests script saves the new id to `{{mobileOtpId}}`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobileNumber\": \"9876543210\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('mobileOtpId', res.data.otpId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OTP sent",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/mobile-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "mobile-otp"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"mobileNumber\": \"9876543210\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"otpId\": \"9c3d1b6a-0e5f-4b7c-9a2d-1f6e8c4d5b03\",\n    \"expiresInSeconds\": 600\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Rate limited",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/mobile-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "mobile-otp"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"mobileNumber\": \"9876543210\"\n}"
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Too many attempts. Please try again later.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:00:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Verify Mobile OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/intake/mobile-otp/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "intake",
+                "mobile-otp",
+                "verify"
+              ]
+            },
+            "description": "**Permission:** `workers.create`.\n\n**Validation**\n- `otpId` - required, must be the id from Send Mobile OTP.\n- `code` - required, non-blank, max 10 chars.\n\nConsumes the OTP. Max 5 attempts per OTP (counted even on a wrong guess) before it is locked out and a new one must be requested via Send Mobile OTP. Returns no payload (`data: null`) - success just means the mobile number is now verified for this wizard session; the UI simply advances to the Aadhaar step next.\n\nSafe to retry on a network timeout: a concurrent duplicate submit of the exact same `otpId` is retried internally against the latest row (up to 5 times) rather than racing into a spurious error.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown / already-consumed / expired `otpId`, or a wrong `code` | `VALIDATION_ERROR` | 400 - \"Invalid or expired verification code\", deliberately identical wording for all three cases |\n| 5th+ wrong attempt on the same OTP | `BUSINESS_RULE_VIOLATION` | 422 - \"Too many invalid attempts. Please request a new code.\" |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"otpId\": \"{{mobileOtpId}}\",\n  \"code\": \"482913\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Verified",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/mobile-otp/verify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "mobile-otp",
+                    "verify"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"otpId\": \"{{mobileOtpId}}\",\n  \"code\": \"482913\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": null,\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - Invalid or expired code",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/mobile-otp/verify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "mobile-otp",
+                    "verify"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"otpId\": \"{{mobileOtpId}}\",\n  \"code\": \"000000\"\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Invalid or expired verification code\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:01:00Z\",\n    \"traceId\": \"b2c3d4e5f6071829\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send Aadhaar OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/intake/aadhaar-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "intake",
+                "aadhaar-otp"
+              ]
+            },
+            "description": "**Permission:** `workers.create`.\n\n**Validation**\n- `aadhaarNumber` - required, non-blank, max 20 chars. Deliberately **no format/checksum** validation (see the folder description).\n- `consentGiven` - must be literally `true`; `false` or omitted is rejected outright, never inferred from the call simply being made.\n\nChecked in this order: (1) consent, (2) duplicate check - this Aadhaar number must not already belong to a different worker's KYC profile, (3) rate limits, (4) the e-KYC provider call itself. See the folder description for the rate-limit shape and the stub-vs-real-provider split.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Blank/>20-char `aadhaarNumber`, or `consentGiven` not `true` | `VALIDATION_ERROR` | 400 |\n| This Aadhaar number already belongs to another worker's KYC profile | `CONFLICT` | 409 - \"This Aadhaar number is already registered to another worker.\" |\n| Rate limit exceeded (per-Aadhaar-number or per-IP) | `BUSINESS_RULE_VIOLATION` | 422 - \"Too many attempts. Please try again later.\" |\n| Provider rejected the request (`sandbox` only - the local `stub` never does) | `BUSINESS_RULE_VIOLATION` | 422 - provider-specific message |\n\nThis request's Tests script saves the new id to `{{verificationId}}`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aadhaarNumber\": \"234123412346\",\n  \"consentGiven\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('verificationId', res.data.verificationId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OTP sent (local stub)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/aadhaar-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "aadhaar-otp"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"aadhaarNumber\": \"234123412346\",\n  \"consentGiven\": true\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"verificationId\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"expiresInSeconds\": 600\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - Duplicate Aadhaar",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/aadhaar-otp",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "aadhaar-otp"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"aadhaarNumber\": \"234123412346\",\n  \"consentGiven\": true\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"This Aadhaar number is already registered to another worker.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:02:00Z\",\n    \"traceId\": \"c3d4e5f607182930\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Verify Aadhaar OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/intake/aadhaar-otp/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "intake",
+                "aadhaar-otp",
+                "verify"
+              ]
+            },
+            "description": "**Permission:** `workers.create`.\n\n**Validation**\n- `verificationId` - required, must be the id from Send Aadhaar OTP.\n- `otp` - required, non-blank, max 10 chars. **With the local stub provider, the only value ever accepted is the fixed `123456`.**\n\nChecked in order: verification exists, not already consumed/VERIFIED, not expired (10-minute TTL), attempt count < 3, then the provider call itself, then a minimum-age check (worker must be at least 18, derived from the verified date of birth - underage fails the verification **permanently**; it cannot be retried, a fresh Send Aadhaar OTP is required).\n\nMax 3 attempts (unlike mobile OTP's 5) before lock-out. **Not** auto-retried on a concurrent-write conflict the way Verify Mobile OTP is - a genuine simultaneous double-submit instead surfaces as a plain `409 CONFLICT` (optimistic-locking), rare enough that letting the admin just retry once is the right tradeoff rather than re-invoking an external, typically single-use provider call automatically.\n\nOn success: stores the provider's photo (if any) as a document, and resolves `stateName`/`districtName` against ATW's own Geography masterdata (see **ATW-Masterdata.postman_collection.json**) by case-insensitive exact name match - `stateId`/`cityId` come back `null` (never an error) when no confident match is found, and the admin picks the closest option manually in that case. `gender` is passed through exactly as the provider returned it (free text, e.g. `\"MALE\"`/`\"FEMALE\"`/`\"TRANSGENDER\"` - **not** validated against a fixed enum at this layer).\n\n**This response's `verificationId` is the value to send as `aadhaarVerificationId` when creating the worker** (`POST /api/v1/admin/workers` - see the **ATW-Worker** collection, written concurrently with this one). That call consumes it to mark the new worker's KYC `VERIFIED` immediately and carries over the verified photo. A verification can be consumed by exactly one worker, ever - a second attempt to reuse it fails worker creation with `CONFLICT`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown `verificationId` | `VALIDATION_ERROR` | 400 - \"Invalid or expired verification request\" |\n| Already VERIFIED/consumed | `VALIDATION_ERROR` | 400 - \"This verification has already been completed.\" |\n| Expired (10-minute TTL) | `VALIDATION_ERROR` | 400 - \"Invalid or expired verification code\" |\n| 3rd+ wrong attempt | `BUSINESS_RULE_VIOLATION` | 422 - \"Too many invalid attempts. Please start over.\" |\n| Wrong/expired OTP at the provider (anything but `123456` on the stub) | `BUSINESS_RULE_VIOLATION` | 422 - \"Invalid or expired OTP\" |\n| Verified identity's age < 18 | `BUSINESS_RULE_VIOLATION` | 422 - \"Worker must be at least 18 years old.\" |\n| Two concurrent submits of the exact same verification+code (rare) | `CONFLICT` | 409 - generic optimistic-lock message |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verificationId\": \"{{verificationId}}\",\n  \"otp\": \"123456\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Verified (local stub)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/aadhaar-otp/verify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "aadhaar-otp",
+                    "verify"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"verificationId\": \"{{verificationId}}\",\n  \"otp\": \"123456\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"verificationId\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"fullName\": \"Stub Verified Worker\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-01-01\",\n    \"addressLine1\": \"123 Stub Street\",\n    \"addressLine2\": null,\n    \"pincode\": \"110001\",\n    \"stateName\": \"Delhi\",\n    \"stateId\": \"4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2\",\n    \"districtName\": \"New Delhi\",\n    \"cityId\": \"9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01\",\n    \"hasPhoto\": false\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Worker underage",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/intake/aadhaar-otp/verify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "intake",
+                    "aadhaar-otp",
+                    "verify"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"verificationId\": \"{{verificationId}}\",\n  \"otp\": \"123456\"\n}"
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Worker must be at least 18 years old.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:03:00Z\",\n    \"traceId\": \"d4e5f6071829304b\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Worker KYC",
+      "description": "View a worker's KYC profile, and manually record identity numbers - behind `AdminWorkerKycController`. Requires `Authorization: Bearer {{accessToken}}` and the matching **`kyc.*`** permission below (not `workers.*` - contrast with the Worker Intake folder above).\n\n**This is worker KYC - a gig worker's own identity documents - not admin staff's own KYC.** Admin staff also have `aadhaarNumber`/`panNumber`/`uanNumber`/`pfNumber`/`esicNumber` fields of their own, a completely separate feature (`AdminStaffController`, `admin_staff.view_kyc` permission, documented in **ATW-RBAC-Staff.postman_collection.json**). The two share the word \"KYC\" and nothing else - different tables, different permissions, different controllers. Don't confuse them.\n\n**Manual document upload/review was removed from this module entirely.** An earlier version required an admin to upload a photo of the Aadhaar card and manually review it; now that a live, government-backed Aadhaar e-KYC call can confirm the same identity directly (see the Worker Intake folder above), that manual review added no real trust and was removed. These two write endpoints remain only as the **unverified fallback** - recording a declared number as-is - for a worker who didn't go through (or whose) Aadhaar e-KYC didn't succeed. There is nothing left here for an admin to approve or reject.\n\n**Masking:** `aadhaarNumber`/`panNumber` come back masked to the last 4 characters (e.g. `\"********2346\"`) in every response below unless the caller also holds `kyc.view_sensitive` - a separate, narrower permission from `kyc.view`/`kyc.submit`, the same pattern as `admin_staff.view_kyc` in the Staff module.\n\n**Encryption and duplicate checks:** both numbers are encrypted at rest (AES-GCM, the worker-PII key) and separately hashed (deterministic, keyed HMAC-SHA256) purely to enforce a cross-worker duplicate check without ever decrypting stored values to search them - the same Aadhaar or PAN cannot be attached to two different workers, whichever path (this manual fallback, or the live e-KYC wizard above) was used to record it first.\n\n**Behavior note on `workerId`:** none of these three endpoints checks that `workerId` actually corresponds to a real worker before acting. **Get KYC Profile** simply returns a NOT_STARTED placeholder for any unknown-but-well-formed `workerId` - see that request's own description. **Submit Aadhaar (Manual)** / **Submit PAN (Manual)** will only fail for a nonexistent `workerId` if/when the database's own foreign-key constraint on `worker_kyc_profile.worker_id` rejects the insert - surfaced as a generic `409 CONFLICT`, not a clean `404`. Always use a real `workerId` from an actual Create Worker call (in the separate **ATW-Worker** collection).\n\n**Not exposed here:** `findWorkerIdsByStatus`/`getStatuses` (`KycService`) back the admin worker list's `kycStatus` column/filter internally - they are plain internal module calls, not their own admin endpoint, and are out of scope for this collection.",
+      "item": [
+        {
+          "name": "Get KYC Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "{{workerId}}",
+                "kyc"
+              ]
+            },
+            "description": "**Permission:** `kyc.view` (add `kyc.view_sensitive` to see `aadhaarNumber`/`panNumber` unmasked).\n\n**Behavior:** never 404s, even for a `workerId` that doesn't exist as a real worker - see the folder description. A worker with no KYC profile row at all yet returns a placeholder: `overallStatus: \"NOT_STARTED\"`, both numbers `null`, `verifiedAt`/`verificationRef` both `null`. This is deliberate, so a worker-detail screen never needs special-case error handling just to render its KYC tab.\n\n`overallStatus` is one of `NOT_STARTED` | `PENDING` | `VERIFIED` | `REJECTED` (`REJECTED` is reserved for future use - nothing in this module sets it today).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| `workerId` path segment is not a valid UUID | `VALIDATION_ERROR` | 400 |\n\n(An unknown-but-well-formed `workerId` is **not** an error - see Behavior above.)"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Unverified, masked",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "kyc"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"workerId\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"aadhaarNumber\": \"********2346\",\n    \"panNumber\": null,\n    \"overallStatus\": \"PENDING\",\n    \"verifiedAt\": null,\n    \"verificationRef\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "200 - No KYC submitted yet (placeholder, not a 404)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "kyc"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"workerId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"aadhaarNumber\": null,\n    \"panNumber\": null,\n    \"overallStatus\": \"NOT_STARTED\",\n    \"verifiedAt\": null,\n    \"verificationRef\": null\n  },\n  \"error\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Aadhaar (Manual)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc/aadhaar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "{{workerId}}",
+                "kyc",
+                "aadhaar"
+              ]
+            },
+            "description": "**Permission:** `kyc.submit`.\n\n**Validation**\n- `aadhaarNumber` - required, non-blank, max 20 chars. Deliberately **no format/checksum validation** - only the length cap, to avoid rejecting legitimate input on a guessed-at pattern (confirmed in `SubmitAadhaarRequest`'s Javadoc).\n\nRecords the number as declared, **unverified**. Moves `overallStatus` from `NOT_STARTED` to `PENDING` - leaves it unchanged if already `PENDING`/`VERIFIED`/`REJECTED`, so this can never downgrade an already-verified profile. Creates the worker's KYC profile row on first use if one doesn't exist yet.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Blank/>20-char `aadhaarNumber` | `VALIDATION_ERROR` | 400 |\n| This Aadhaar number already belongs to a different worker | `CONFLICT` | 409 - \"This Aadhaar number is already registered to another worker.\" |\n| `workerId` doesn't correspond to a real worker (rare - see the folder's behavior note) | `CONFLICT` | 409 - generic duplicate/FK safety-net message |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aadhaarNumber\": \"234123412346\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Recorded, now PENDING",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc/aadhaar",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "kyc",
+                    "aadhaar"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"aadhaarNumber\": \"234123412346\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"workerId\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"aadhaarNumber\": \"********2346\",\n    \"panNumber\": null,\n    \"overallStatus\": \"PENDING\",\n    \"verifiedAt\": null,\n    \"verificationRef\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - Duplicate Aadhaar",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc/aadhaar",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "kyc",
+                    "aadhaar"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"aadhaarNumber\": \"234123412346\"\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"This Aadhaar number is already registered to another worker.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:05:00Z\",\n    \"traceId\": \"f607182930415c6d\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit PAN (Manual)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc/pan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "{{workerId}}",
+                "kyc",
+                "pan"
+              ]
+            },
+            "description": "**Permission:** `kyc.submit`.\n\n**Validation**\n- `panNumber` - required; must match `^[A-Z]{5}[0-9]{4}[A-Z]$` (5 letters, 4 digits, 1 letter, e.g. `ABCPE1234F`). Lowercase/mixed-case input is accepted and silently normalized to uppercase before the pattern check runs, so `abcpe1234f` is also valid input. **This format check is new as of 2026-11-13** - added because PAN's 10-character structure is a stable, officially published format (unlike Aadhaar, which deliberately has none - see Submit Aadhaar (Manual)). Exact validation-failure message, from `SubmitPanRequest`: **\"PAN must be 5 letters, 4 digits, 1 letter (e.g. ABCPE1234F)\"**.\n\nSame duplicate-across-workers check and same `NOT_STARTED` -> `PENDING` transition as Submit Aadhaar (Manual) - the duplicate check is **also new as of 2026-11**: previously two workers could be given the same PAN with no error at all.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| `panNumber` doesn't match the format above | `VALIDATION_ERROR` | 400 - \"PAN must be 5 letters, 4 digits, 1 letter (e.g. ABCPE1234F)\", with `fieldErrors: [{\"field\": \"panNumber\", ...}]` |\n| This PAN already belongs to a different worker | `CONFLICT` | 409 - \"This PAN is already registered to another worker.\" |\n| `workerId` doesn't correspond to a real worker (rare - see the folder's behavior note) | `CONFLICT` | 409 - generic FK safety-net message |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"panNumber\": \"ABCPE1234F\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Recorded, now PENDING",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc/pan",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "kyc",
+                    "pan"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"panNumber\": \"ABCPE1234F\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"workerId\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"aadhaarNumber\": null,\n    \"panNumber\": \"******234F\",\n    \"overallStatus\": \"PENDING\",\n    \"verifiedAt\": null,\n    \"verificationRef\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - Bad PAN format",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc/pan",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "kyc",
+                    "pan"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"panNumber\": \"NOTAPAN\"\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Request validation failed\",\n    \"fieldErrors\": [\n      { \"field\": \"panNumber\", \"message\": \"PAN must be 5 letters, 4 digits, 1 letter (e.g. ABCPE1234F)\" }\n    ],\n    \"timestamp\": \"2026-11-13T10:06:00Z\",\n    \"traceId\": \"0718293041a5c6d7\"\n  }\n}"
+            },
+            {
+              "name": "409 - Duplicate PAN",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/kyc/pan",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "kyc",
+                    "pan"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"panNumber\": \"ABCPE1234F\"\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"This PAN is already registered to another worker.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:07:00Z\",\n    \"traceId\": \"182930415c6d7e08\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

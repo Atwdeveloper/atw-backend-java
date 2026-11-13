@@ -1,6 +1,6 @@
 package in.anytimework.atwbackend.identity.application;
 
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserProfileDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserProfileResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateProfileRequest;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserProfile;
@@ -32,14 +32,14 @@ public class AdminStaffProfileService {
     }
 
     @Transactional(readOnly = true)
-    public AdminUserProfileDto get(UUID staffId) {
+    public AdminUserProfileResponse get(UUID staffId) {
         requireStaffExists(staffId);
         return profiles.findByAdminUserId(staffId).map(this::toDto)
-                .orElse(new AdminUserProfileDto(null, null));
+                .orElse(new AdminUserProfileResponse(null, null));
     }
 
     @Transactional
-    public AdminUserProfileDto update(UUID staffId, UpdateProfileRequest request, String ip, String userAgent) {
+    public AdminUserProfileResponse update(UUID staffId, UpdateProfileRequest request, String ip, String userAgent) {
         AdminUser admin = requireStaffExists(staffId);
         if (admin.isSuperAdmin()) {
             throw new BusinessRuleException("Super-admin accounts cannot be modified through this endpoint.");
@@ -55,7 +55,7 @@ public class AdminStaffProfileService {
         return adminUsers.findById(staffId).orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
     }
 
-    private AdminUserProfileDto toDto(AdminUserProfile profile) {
-        return new AdminUserProfileDto(profile.getDateOfBirth(), profile.getGender());
+    private AdminUserProfileResponse toDto(AdminUserProfile profile) {
+        return new AdminUserProfileResponse(profile.getDateOfBirth(), profile.getGender());
     }
 }

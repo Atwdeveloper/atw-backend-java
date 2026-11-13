@@ -1,6 +1,6 @@
 package in.anytimework.atwbackend.identity.application;
 
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateBankDetailRequest;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserBankDetail;
@@ -42,14 +42,14 @@ public class AdminStaffBankDetailService {
     }
 
     @Transactional(readOnly = true)
-    public AdminUserBankDetailDto get(UUID staffId) {
+    public AdminUserBankDetailResponse get(UUID staffId) {
         requireStaffExists(staffId);
         return bankDetails.findByAdminUserId(staffId).map(this::toResponseDto)
-                .orElse(new AdminUserBankDetailDto(null, null, null, null, null));
+                .orElse(new AdminUserBankDetailResponse(null, null, null, null, null));
     }
 
     @Transactional
-    public AdminUserBankDetailDto update(UUID staffId, UpdateBankDetailRequest request, String ip, String userAgent) {
+    public AdminUserBankDetailResponse update(UUID staffId, UpdateBankDetailRequest request, String ip, String userAgent) {
         AdminUser admin = requireStaffExists(staffId);
         if (admin.isSuperAdmin()) {
             throw new BusinessRuleException("Super-admin accounts cannot be modified through this endpoint.");
@@ -67,10 +67,10 @@ public class AdminStaffBankDetailService {
         return adminUsers.findById(staffId).orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
     }
 
-    private AdminUserBankDetailDto toResponseDto(AdminUserBankDetail detail) {
+    private AdminUserBankDetailResponse toResponseDto(AdminUserBankDetail detail) {
         boolean unmasked = permissionChecker.has("admin_staff.view_bank_details");
         String accountNumber = unmasked ? detail.getAccountNumber() : PiiMasking.maskTail(detail.getAccountNumber());
-        return new AdminUserBankDetailDto(detail.getAccountHolderName(), detail.getBankName(),
+        return new AdminUserBankDetailResponse(detail.getAccountHolderName(), detail.getBankName(),
                 accountNumber, detail.getIfscCode(), detail.getBranchName());
     }
 }

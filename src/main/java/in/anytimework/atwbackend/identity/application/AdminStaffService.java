@@ -2,7 +2,7 @@ package in.anytimework.atwbackend.identity.application;
 
 import in.anytimework.atwbackend.identity.api.staff.dto.CreateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminRoleRef;
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.domain.AdminStatus;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
@@ -84,18 +84,18 @@ public class AdminStaffService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<AdminStaffDto> list(Pageable pageable) {
-        Page<AdminStaffDto> page = adminUsers.findAll(pageable).map(this::toDto);
+    public PageResponse<AdminStaffResponse> list(Pageable pageable) {
+        Page<AdminStaffResponse> page = adminUsers.findAll(pageable).map(this::toDto);
         return PageResponse.from(page);
     }
 
     @Transactional(readOnly = true)
-    public AdminStaffDto get(UUID id) {
+    public AdminStaffResponse get(UUID id) {
         return toDto(findOrThrow(id));
     }
 
     @Transactional
-    public AdminStaffDto create(CreateAdminStaffRequest request, String ip, String userAgent) {
+    public AdminStaffResponse create(CreateAdminStaffRequest request, String ip, String userAgent) {
         if (adminUsers.existsByEmailIgnoreCase(request.email())) {
             throw new ConflictException("An admin with this email already exists.");
         }
@@ -119,7 +119,7 @@ public class AdminStaffService {
     }
 
     @Transactional
-    public AdminStaffDto update(UUID id, UpdateAdminStaffRequest request, String ip, String userAgent) {
+    public AdminStaffResponse update(UUID id, UpdateAdminStaffRequest request, String ip, String userAgent) {
         AdminUser admin = findOrThrow(id);
         if (admin.isSuperAdmin()) {
             throw new BusinessRuleException("Super-admin accounts cannot be modified through this endpoint.");
@@ -151,7 +151,7 @@ public class AdminStaffService {
     }
 
     @Transactional
-    public AdminStaffDto updateStatus(UUID id, AdminStatus newStatus, String ip, String userAgent) {
+    public AdminStaffResponse updateStatus(UUID id, AdminStatus newStatus, String ip, String userAgent) {
         AdminUser admin = findOrThrow(id);
         guardNotSelfOrSuperAdmin(admin, "deactivate");
         admin.setStatus(newStatus);
@@ -166,11 +166,34 @@ public class AdminStaffService {
         return toDto(admin);
     }
 
+    /**
+     * Soft-deletes a staff account: sets {@code deletedAt} (via {@link AdminUser#markDeleted}) rather
+     * than ever issuing a real SQL DELETE. {@link AdminUser}'s {@code @SQLRestriction("deleted_at is
+     * null")} then makes this admin invisible to every existing query path - {@link #findOrThrow},
+     * login lookups, the pessimistic-lock JPQL - automatically, with no other method needing to check
+     * a "deleted" flag itself.
+     *
+     * <p>Every one of this admin's own satellite rows (profile, bank detail, address, KYC - including
+     * PF/ESIC numbers that may be needed for post-departure statutory reporting - and role
+     * assignments) is left completely untouched - nothing is cascaded away, preserving full history
+     * for audit/reconciliation (their {@code ON DELETE CASCADE} FKs to {@code admin_user.id} simply
+     * never fire via this path anymore). The admin's username and email both become available again
+     * for a new hire to be created with - the same reuse-after-delete decision already made for
+     * {@code Worker}'s mobile number; see {@code V29__admin_user_soft_delete.sql}'s comment for why
+     * email reuse specifically may be worth a second look before this matters in production.</p>
+     *
+     * <p>The existing {@link #guardNotSelfOrSuperAdmin} guard (no self-delete, no deleting the
+     * bootstrap super-admin) is kept unchanged - it protects against a different risk than the
+     * hard/soft-delete mechanism and is unaffected by this change. There is deliberately no
+     * restore/undelete endpoint yet - nothing is destroyed, so one can be added later purely at the
+     * application layer, with no migration changes.</p>
+     */
     @Transactional
     public void delete(UUID id, String ip, String userAgent) {
         AdminUser admin = findOrThrow(id);
         guardNotSelfOrSuperAdmin(admin, "delete");
-        adminUsers.delete(admin);
+        admin.markDeleted(clock.instant());
+        adminUsers.save(admin);
         audit.record(currentAdmin.id().orElse(null), "ADMIN_STAFF_DELETED", id.toString(), ip, userAgent);
     }
 
@@ -218,12 +241,12 @@ public class AdminStaffService {
         return adminUsers.findById(id).orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
     }
 
-    private AdminStaffDto toDto(AdminUser admin) {
+    private AdminStaffResponse toDto(AdminUser admin) {
         List<AdminRoleRef> roleRefs = admin.getRoles().stream()
                 .map(r -> new AdminRoleRef(r.getId(), r.getName()))
                 .sorted(Comparator.comparing(AdminRoleRef::name))
                 .toList();
-        return new AdminStaffDto(admin.getId(), admin.getUsername(), admin.getEmail(), admin.getFullName(),
+        return new AdminStaffResponse(admin.getId(), admin.getUsername(), admin.getEmail(), admin.getFullName(),
                 admin.getPhone(), admin.isSuperAdmin(), admin.getStatus(), roleRefs,
                 admin.getLastLoginAt(), admin.getCreatedAt());
     }

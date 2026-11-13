@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.identity.infrastructure;
 import in.anytimework.atwbackend.identity.application.AdminBootstrapProperties;
 import in.anytimework.atwbackend.identity.application.AdminSecurityProperties;
 import in.anytimework.atwbackend.shared.security.PiiEncryptionProperties;
+import in.anytimework.atwbackend.shared.security.WorkerPiiEncryptionProperties;
 import in.anytimework.atwbackend.shared.security.jwt.JwtProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
@@ -28,15 +29,22 @@ class StartupSecurityValidatorTest {
 
     private static final String VALID_JWT_SECRET = "a-sufficiently-long-and-unique-production-jwt-secret-value";
     private static final String VALID_PII_KEY = Base64.getEncoder().encodeToString(new byte[32]);
+    private static final WorkerPiiEncryptionProperties VALID_WORKER_PII =
+            new WorkerPiiEncryptionProperties(Base64.getEncoder().encodeToString(new byte[32]));
 
     private final Environment environment = mock(Environment.class);
     private final AdminBootstrapProperties bootstrapProperties =
             new AdminBootstrapProperties(false, null, null, null, null);
 
     private StartupSecurityValidator validator(PiiEncryptionProperties pii, AdminSecurityProperties admin) {
+        return validator(pii, VALID_WORKER_PII, admin);
+    }
+
+    private StartupSecurityValidator validator(PiiEncryptionProperties pii, WorkerPiiEncryptionProperties workerPii,
+                                               AdminSecurityProperties admin) {
         when(environment.acceptsProfiles(any(Profiles.class))).thenReturn(false);
         JwtProperties jwt = new JwtProperties(VALID_JWT_SECRET, Duration.ofMinutes(15), Duration.ofDays(7), "atw-backend");
-        return new StartupSecurityValidator(environment, jwt, bootstrapProperties, pii, admin);
+        return new StartupSecurityValidator(environment, jwt, bootstrapProperties, pii, workerPii, admin);
     }
 
     /** Simulates the "dev" profile being active - and only "dev", not local/test too. */
@@ -45,7 +53,7 @@ class StartupSecurityValidatorTest {
         when(devEnvironment.acceptsProfiles(any(Profiles.class)))
                 .thenAnswer(invocation -> ((Profiles) invocation.getArgument(0)).matches("dev"::equals));
         JwtProperties jwt = new JwtProperties(VALID_JWT_SECRET, Duration.ofMinutes(15), Duration.ofDays(7), "atw-backend");
-        return new StartupSecurityValidator(devEnvironment, jwt, bootstrapProperties, pii, admin);
+        return new StartupSecurityValidator(devEnvironment, jwt, bootstrapProperties, pii, VALID_WORKER_PII, admin);
     }
 
     private static AdminSecurityProperties adminSecurity(boolean otpInResponse) {
@@ -90,6 +98,47 @@ class StartupSecurityValidatorTest {
     void piiKeyNotValidBase64_throws() {
         StartupSecurityValidator v = validator(new PiiEncryptionProperties("not-valid-base64!!"), adminSecurity(false));
         assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void missingWorkerPiiKey_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties(null), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("WORKER_PII_ENCRYPTION_KEY");
+    }
+
+    @Test
+    void workerPiiKeyWrongByteLength_throws() {
+        String tooShort = Base64.getEncoder().encodeToString(new byte[16]);
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties(tooShort), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("32 bytes");
+    }
+
+    @Test
+    void workerPiiKeyEqualsKnownLocalLiteral_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties("c8ZWWQX6uaMDrKhuKJU8cwyz80sraP4EdBWcKfHZ4WM="), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("publicly-committed local-dev value");
+    }
+
+    @Test
+    void workerPiiKeyNotValidBase64_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties("not-valid-base64!!"), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void workerPiiKeyEqualsIdentityKey_doesNotThrow() {
+        // Confirms the two keys are validated independently - reusing the (valid) identity key value
+        // for the worker key is not itself flagged as the known-local-literal case.
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false));
+        assertThatCode(() -> v.run(null)).doesNotThrowAnyException();
     }
 
     @Test

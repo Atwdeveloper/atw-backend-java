@@ -19,15 +19,17 @@ class NotificationServiceImpl implements NotificationService {
     private final EmailTemplateRepository templates;
     private final TemplateRenderer renderer;
     private final EmailSender emailSender;
+    private final SmsSender smsSender;
     private final NotificationLogWriter logWriter;
     private final ApplicationEventPublisher events;
 
     NotificationServiceImpl(EmailTemplateRepository templates, TemplateRenderer renderer,
-                            EmailSender emailSender, NotificationLogWriter logWriter,
+                            EmailSender emailSender, SmsSender smsSender, NotificationLogWriter logWriter,
                             ApplicationEventPublisher events) {
         this.templates = templates;
         this.renderer = renderer;
         this.emailSender = emailSender;
+        this.smsSender = smsSender;
         this.logWriter = logWriter;
         this.events = events;
     }
@@ -61,5 +63,14 @@ class NotificationServiceImpl implements NotificationService {
     public void enqueue(SendEmailCommand command) {
         // Published inside this transaction, so the outbox persists it atomically with any other work.
         events.publishEvent(new EmailRequestedEvent(command));
+    }
+
+    @Override
+    public void sendSms(String toMobileNumber, String body) {
+        try {
+            smsSender.send(new SmsMessage(toMobileNumber, body));
+        } catch (RuntimeException ex) {
+            throw new BusinessRuleException("Failed to send SMS to " + toMobileNumber);
+        }
     }
 }

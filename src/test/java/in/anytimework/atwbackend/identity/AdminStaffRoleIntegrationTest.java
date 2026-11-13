@@ -1,15 +1,15 @@
 package in.anytimework.atwbackend.identity;
 
 import in.anytimework.atwbackend.identity.api.role.dto.CreateAdminRoleRequest;
-import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleDto;
+import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleResponse;
 import in.anytimework.atwbackend.identity.api.role.dto.UpdateAdminRoleRequest;
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressDto;
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailDto;
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycDto;
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserProfileDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressResponse;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailResponse;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycResponse;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserProfileResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.CreateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminRoleRef;
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAddressRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateBankDetailRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateKycRequest;
@@ -37,6 +37,7 @@ import in.anytimework.atwbackend.masterdata.domain.StateRepository;
 import in.anytimework.atwbackend.notification.CapturingEmailSender;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
+import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.UnauthorizedException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import org.junit.jupiter.api.Test;
@@ -63,6 +64,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -169,7 +171,7 @@ class AdminStaffRoleIntegrationTest {
         return superAdmin.getId();
     }
 
-    private AdminStaffDto createStaffAsSuperAdmin(String fullName, List<UUID> roleIds) {
+    private AdminStaffResponse createStaffAsSuperAdmin(String fullName, List<UUID> roleIds) {
         UUID setupActor = createSuperAdminActor();
         return actingAs(setupActor, () -> staffService.create(
                 new CreateAdminStaffRequest(null, "staff-" + unique() + "@example.com", fullName, null, roleIds),
@@ -177,7 +179,7 @@ class AdminStaffRoleIntegrationTest {
     }
 
     /** Role creation with a non-empty permissionCodes list also trips PermissionEscalationGuard without an actor. */
-    private AdminRoleDto createRoleAsSuperAdmin(String name, String description, List<String> permissionCodes) {
+    private AdminRoleResponse createRoleAsSuperAdmin(String name, String description, List<String> permissionCodes) {
         UUID setupActor = createSuperAdminActor();
         return actingAs(setupActor, () -> roleService.create(
                 new CreateAdminRoleRequest(name, description, permissionCodes), "127.0.0.1", "JUnit"));
@@ -185,10 +187,10 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void fullLifecycle_createRoleThenStaff_acceptInvite_loginResolvesAssignedPermissions() {
-        AdminRoleDto role = createRoleAsSuperAdmin("QA Tester " + unique(), "d",
+        AdminRoleResponse role = createRoleAsSuperAdmin("QA Tester " + unique(), "d",
                 List.of("dashboard.view", "workers.view"));
 
-        AdminStaffDto staff = createStaffAsSuperAdmin("New Staff", List.of(role.id()));
+        AdminStaffResponse staff = createStaffAsSuperAdmin("New Staff", List.of(role.id()));
         assertThat(staff.status()).isEqualTo(AdminStatus.ACTIVE);
         assertThat(staff.roles().stream().map(AdminRoleRef::name).toList()).containsExactly(role.name());
 
@@ -239,7 +241,7 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void deleteRole_thatIsAssignedToStaff_isRejected() {
-        AdminRoleDto role = roleService.create(new CreateAdminRoleRequest("Assigned Role " + unique(), null, List.of()),
+        AdminRoleResponse role = roleService.create(new CreateAdminRoleRequest("Assigned Role " + unique(), null, List.of()),
                 "127.0.0.1", "JUnit");
         createStaffAsSuperAdmin("Staffer", List.of(role.id()));
 
@@ -278,7 +280,7 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void disablingStaff_revokesTheirActiveSessions() {
-        AdminStaffDto staff = staffService.create(new CreateAdminStaffRequest(null, "staff-" + unique() + "@example.com",
+        AdminStaffResponse staff = staffService.create(new CreateAdminStaffRequest(null, "staff-" + unique() + "@example.com",
                 "To Disable", null, List.of()), "127.0.0.1", "JUnit");
         String inviteToken = extractToken(emailSender.last().htmlBody());
         authService.acceptInvite(inviteToken, "BrandNew@12345", "127.0.0.1", "JUnit");
@@ -293,7 +295,7 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staff_cannotDisableTheirOwnAccount() {
-        AdminStaffDto staff = staffService.create(new CreateAdminStaffRequest(null, "staff-" + unique() + "@example.com",
+        AdminStaffResponse staff = staffService.create(new CreateAdminStaffRequest(null, "staff-" + unique() + "@example.com",
                 "Self", null, List.of()), "127.0.0.1", "JUnit");
 
         actingAs(staff.id(), () -> assertThatThrownBy(() -> staffService.updateStatus(
@@ -320,10 +322,10 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staffWithLimitedPermissions_cannotGrantAMorePrivilegedRoleOnCreate() {
-        AdminRoleDto limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("dashboard.view"));
-        AdminRoleDto powerfulRole = createRoleAsSuperAdmin("Powerful " + unique(), null,
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("dashboard.view"));
+        AdminRoleResponse powerfulRole = createRoleAsSuperAdmin("Powerful " + unique(), null,
                 List.of("dashboard.view", "admin_staff.delete"));
-        AdminStaffDto limitedActor = createStaffAsSuperAdmin("Limited Actor", List.of(limitedRole.id()));
+        AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited Actor", List.of(limitedRole.id()));
 
         actingAs(limitedActor.id(), () -> assertThatThrownBy(() -> staffService.create(new CreateAdminStaffRequest(null,
                 "victim-" + unique() + "@example.com", "Victim", null, List.of(powerfulRole.id())),
@@ -333,11 +335,11 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staffWithLimitedPermissions_cannotGrantAMorePrivilegedRoleOnUpdate() {
-        AdminRoleDto limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("dashboard.view"));
-        AdminRoleDto powerfulRole = createRoleAsSuperAdmin("Powerful " + unique(), null,
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("dashboard.view"));
+        AdminRoleResponse powerfulRole = createRoleAsSuperAdmin("Powerful " + unique(), null,
                 List.of("dashboard.view", "admin_staff.delete"));
-        AdminStaffDto limitedActor = createStaffAsSuperAdmin("Limited Actor", List.of(limitedRole.id()));
-        AdminStaffDto victim = createStaffAsSuperAdmin("Victim", List.of());
+        AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited Actor", List.of(limitedRole.id()));
+        AdminStaffResponse victim = createStaffAsSuperAdmin("Victim", List.of());
 
         actingAs(limitedActor.id(), () -> assertThatThrownBy(() -> staffService.update(victim.id(),
                 new UpdateAdminStaffRequest(null, "Victim", null, List.of(powerfulRole.id())), "127.0.0.1", "JUnit"))
@@ -346,13 +348,13 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staffProfile_updateThenGet_roundTrips() {
-        AdminStaffDto staff = createStaffAsSuperAdmin("Profile Target", List.of());
+        AdminStaffResponse staff = createStaffAsSuperAdmin("Profile Target", List.of());
 
-        AdminUserProfileDto updated = staffProfileService.update(staff.id(),
+        AdminUserProfileResponse updated = staffProfileService.update(staff.id(),
                 new UpdateProfileRequest(LocalDate.of(1995, 6, 15), Gender.FEMALE), "127.0.0.1", "JUnit");
         assertThat(updated.dateOfBirth()).isEqualTo(LocalDate.of(1995, 6, 15));
 
-        AdminUserProfileDto fetched = staffProfileService.get(staff.id());
+        AdminUserProfileResponse fetched = staffProfileService.get(staff.id());
         assertThat(fetched.gender()).isEqualTo(Gender.FEMALE);
     }
 
@@ -364,16 +366,16 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staffAddress_updateThenGet_roundTrips() {
-        AdminStaffDto staff = createStaffAsSuperAdmin("Address Target", List.of());
+        AdminStaffResponse staff = createStaffAsSuperAdmin("Address Target", List.of());
         City jaipur = createTestCity();
 
-        AdminUserAddressDto updated = staffAddressService.update(staff.id(),
+        AdminUserAddressResponse updated = staffAddressService.update(staff.id(),
                 new UpdateAddressRequest("221B Baker Street", "Near City Park", jaipur.getStateId(), jaipur.getId(), "302001"),
                 "127.0.0.1", "JUnit");
         assertThat(updated.line1()).isEqualTo("221B Baker Street");
         assertThat(updated.cityId()).isEqualTo(jaipur.getId());
 
-        AdminUserAddressDto fetched = staffAddressService.get(staff.id());
+        AdminUserAddressResponse fetched = staffAddressService.get(staff.id());
         assertThat(fetched.line1()).isEqualTo("221B Baker Street");
         assertThat(fetched.line2()).isEqualTo("Near City Park");
         assertThat(fetched.stateId()).isEqualTo(jaipur.getStateId());
@@ -381,20 +383,23 @@ class AdminStaffRoleIntegrationTest {
     }
 
     @Test
-    void staffAddress_line1IsEncryptedAtRest() {
-        AdminStaffDto target = createStaffAsSuperAdmin("Address Encryption Target", List.of());
+    void staffAddress_line1IsStoredAsPlainTextNotEncrypted() {
+        // Addresses were encrypted at rest until 2026-11-13 (confirmed with the developer to remove
+        // it - see Address's Javadoc); this bypasses Hibernate to read the raw stored column and
+        // guards against that decision being silently reversed by a future @Convert re-added here.
+        AdminStaffResponse target = createStaffAsSuperAdmin("Address Encryption Target", List.of());
 
         staffAddressService.update(target.id(),
                 new UpdateAddressRequest("42 Residency Road", null, null, null, null), "127.0.0.1", "JUnit");
 
         String rawStored = jdbcTemplate.queryForObject(
                 "select line1 from admin_user_address where admin_user_id = ?", String.class, target.id());
-        assertThat(rawStored).isNotEqualTo("42 Residency Road").doesNotContain("Residency");
+        assertThat(rawStored).isEqualTo("42 Residency Road");
     }
 
     @Test
     void updateAddress_withUnknownState_isRejected() {
-        AdminStaffDto target = createStaffAsSuperAdmin("Bad State Target", List.of());
+        AdminStaffResponse target = createStaffAsSuperAdmin("Bad State Target", List.of());
 
         assertThatThrownBy(() -> staffAddressService.update(target.id(),
                 new UpdateAddressRequest(null, null, UUID.randomUUID(), null, null), "127.0.0.1", "JUnit"))
@@ -412,7 +417,7 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staffKyc_isEncryptedAtRest_andMaskedWithoutViewKycPermission() {
-        AdminStaffDto target = createStaffAsSuperAdmin("KYC Target", List.of());
+        AdminStaffResponse target = createStaffAsSuperAdmin("KYC Target", List.of());
         UUID setupActor = createSuperAdminActor();
         actingAs(setupActor, () -> staffKycService.update(target.id(),
                 new UpdateKycRequest("123456789012", "ABCDE1234F", null, null, null), "127.0.0.1", "JUnit"));
@@ -425,24 +430,24 @@ class AdminStaffRoleIntegrationTest {
                 "select aadhaar_number from admin_user_kyc where admin_user_id = ?", String.class, target.id());
         assertThat(rawStored).isNotEqualTo("123456789012").doesNotContain("123456789012");
 
-        AdminRoleDto viewOnly = createRoleAsSuperAdmin("View Only " + unique(), null, List.of("admin_staff.view"));
-        AdminRoleDto viewKyc = createRoleAsSuperAdmin("View KYC " + unique(), null,
+        AdminRoleResponse viewOnly = createRoleAsSuperAdmin("View Only " + unique(), null, List.of("admin_staff.view"));
+        AdminRoleResponse viewKyc = createRoleAsSuperAdmin("View KYC " + unique(), null,
                 List.of("admin_staff.view", "admin_staff.view_kyc"));
-        AdminStaffDto viewOnlyActor = createStaffAsSuperAdmin("View Only Actor", List.of(viewOnly.id()));
-        AdminStaffDto viewKycActor = createStaffAsSuperAdmin("View KYC Actor", List.of(viewKyc.id()));
+        AdminStaffResponse viewOnlyActor = createStaffAsSuperAdmin("View Only Actor", List.of(viewOnly.id()));
+        AdminStaffResponse viewKycActor = createStaffAsSuperAdmin("View KYC Actor", List.of(viewKyc.id()));
 
-        AdminUserKycDto masked = actingAs(viewOnlyActor.id(), () -> staffKycService.get(target.id()));
+        AdminUserKycResponse masked = actingAs(viewOnlyActor.id(), () -> staffKycService.get(target.id()));
         assertThat(masked.aadhaarNumber()).isNotEqualTo("123456789012").endsWith("9012");
         assertThat(masked.panNumber()).isNotEqualTo("ABCDE1234F").endsWith("234F");
 
-        AdminUserKycDto unmasked = actingAs(viewKycActor.id(), () -> staffKycService.get(target.id()));
+        AdminUserKycResponse unmasked = actingAs(viewKycActor.id(), () -> staffKycService.get(target.id()));
         assertThat(unmasked.aadhaarNumber()).isEqualTo("123456789012");
         assertThat(unmasked.panNumber()).isEqualTo("ABCDE1234F");
     }
 
     @Test
     void staffBankDetail_accountNumberIsEncryptedAndMaskedWithoutViewBankDetailsPermission() {
-        AdminStaffDto target = createStaffAsSuperAdmin("Bank Target", List.of());
+        AdminStaffResponse target = createStaffAsSuperAdmin("Bank Target", List.of());
         UUID setupActor = createSuperAdminActor();
         actingAs(setupActor, () -> staffBankDetailService.update(target.id(),
                 new UpdateBankDetailRequest("Target Holder", "Test Bank", "000111222333", "TEST0001234", "MG Road"),
@@ -452,10 +457,10 @@ class AdminStaffRoleIntegrationTest {
                 "select account_number from admin_user_bank_detail where admin_user_id = ?", String.class, target.id());
         assertThat(rawStored).isNotEqualTo("000111222333").doesNotContain("000111222333");
 
-        AdminRoleDto viewOnly = createRoleAsSuperAdmin("View Only Bank " + unique(), null, List.of("admin_staff.view"));
-        AdminStaffDto viewOnlyActor = createStaffAsSuperAdmin("View Only Bank Actor", List.of(viewOnly.id()));
+        AdminRoleResponse viewOnly = createRoleAsSuperAdmin("View Only Bank " + unique(), null, List.of("admin_staff.view"));
+        AdminStaffResponse viewOnlyActor = createStaffAsSuperAdmin("View Only Bank Actor", List.of(viewOnly.id()));
 
-        AdminUserBankDetailDto masked = actingAs(viewOnlyActor.id(), () -> staffBankDetailService.get(target.id()));
+        AdminUserBankDetailResponse masked = actingAs(viewOnlyActor.id(), () -> staffBankDetailService.get(target.id()));
         assertThat(masked.accountNumber()).isNotEqualTo("000111222333").endsWith("2333");
         // Non-sensitive fields are never masked.
         assertThat(masked.bankName()).isEqualTo("Test Bank");
@@ -473,8 +478,8 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void roleCreate_cannotGrantAPermissionBeyondTheActorsOwn() {
-        AdminRoleDto limitedRole = createRoleAsSuperAdmin("Limited RC " + unique(), null, List.of("dashboard.view"));
-        AdminStaffDto limitedActor = createStaffAsSuperAdmin("Limited RC Actor", List.of(limitedRole.id()));
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited RC " + unique(), null, List.of("dashboard.view"));
+        AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited RC Actor", List.of(limitedRole.id()));
 
         actingAs(limitedActor.id(), () -> assertThatThrownBy(() -> roleService.create(
                 new CreateAdminRoleRequest("Sneaky " + unique(), null, List.of("dashboard.view", "admin_staff.delete")),
@@ -487,9 +492,9 @@ class AdminStaffRoleIntegrationTest {
         // The attack this guards against: editing an ALREADY-ASSIGNED role's permissions after the
         // fact, rather than assigning a new, more-powerful role - AdminStaffService's own guard only
         // ever sees an assignment event, not a later mutation of a role someone already holds.
-        AdminRoleDto limitedRole = createRoleAsSuperAdmin("Limited RU " + unique(), null, List.of("dashboard.view"));
-        AdminRoleDto targetRole = createRoleAsSuperAdmin("Target RU " + unique(), null, List.of("dashboard.view"));
-        AdminStaffDto limitedActor = createStaffAsSuperAdmin("Limited RU Actor", List.of(limitedRole.id()));
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited RU " + unique(), null, List.of("dashboard.view"));
+        AdminRoleResponse targetRole = createRoleAsSuperAdmin("Target RU " + unique(), null, List.of("dashboard.view"));
+        AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited RU Actor", List.of(limitedRole.id()));
 
         actingAs(limitedActor.id(), () -> assertThatThrownBy(() -> roleService.update(targetRole.id(),
                 new UpdateAdminRoleRequest("Target RU", null, List.of("dashboard.view", "admin_staff.delete")),
@@ -499,11 +504,11 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void changingStaffRoles_forcesReLogin_butAPlainProfileEditDoesNot() {
-        AdminRoleDto roleA = roleService.create(new CreateAdminRoleRequest("Role A " + unique(), null, List.of()),
+        AdminRoleResponse roleA = roleService.create(new CreateAdminRoleRequest("Role A " + unique(), null, List.of()),
                 "127.0.0.1", "JUnit");
-        AdminRoleDto roleB = roleService.create(new CreateAdminRoleRequest("Role B " + unique(), null, List.of()),
+        AdminRoleResponse roleB = roleService.create(new CreateAdminRoleRequest("Role B " + unique(), null, List.of()),
                 "127.0.0.1", "JUnit");
-        AdminStaffDto staff = createStaffAsSuperAdmin("Role Change Target", List.of(roleA.id()));
+        AdminStaffResponse staff = createStaffAsSuperAdmin("Role Change Target", List.of(roleA.id()));
         String inviteToken = extractToken(emailSender.last().htmlBody());
         authService.acceptInvite(inviteToken, "BrandNew@12345", "127.0.0.1", "JUnit");
         AuthTokens tokens = loginFully(staff);
@@ -537,16 +542,81 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void createStaff_withEmptyStringUsername_normalizesToNullAndAllowsMultiple() {
-        AdminStaffDto first = staffService.create(new CreateAdminStaffRequest("", "staff-" + unique() + "@example.com",
+        AdminStaffResponse first = staffService.create(new CreateAdminStaffRequest("", "staff-" + unique() + "@example.com",
                 "Empty Username First", null, List.of()), "127.0.0.1", "JUnit");
-        AdminStaffDto second = staffService.create(new CreateAdminStaffRequest("", "staff-" + unique() + "@example.com",
+        AdminStaffResponse second = staffService.create(new CreateAdminStaffRequest("", "staff-" + unique() + "@example.com",
                 "Empty Username Second", null, List.of()), "127.0.0.1", "JUnit");
 
         assertThat(adminUsers.findById(first.id()).orElseThrow().getUsername()).isNull();
         assertThat(adminUsers.findById(second.id()).orElseThrow().getUsername()).isNull();
     }
 
-    private AuthTokens loginFully(AdminStaffDto staff) {
+    // ---- delete: soft-delete mechanism (2026-11-11 audit fix - was a hard delete) ------------------
+
+    @Test
+    void delete_softDeletesAdmin_disappearsFromGetAndLoginLookup() {
+        UUID actorId = createSuperAdminActor();
+        AdminStaffResponse target = createStaffAsSuperAdmin("Deletable Staffer", List.of());
+
+        actingAs(actorId, () -> staffService.delete(target.id(), "127.0.0.1", "JUnit"));
+
+        assertThatThrownBy(() -> staffService.get(target.id())).isInstanceOf(ResourceNotFoundException.class);
+        // The security-critical property: AuthService's login lookup must not find a deleted admin.
+        // (A literal null for the "username" half would make Spring Data translate it to "username IS
+        // NULL", matching every other usernameless admin in this accumulating test DB - passing the
+        // same value into both slots avoids that trap while still exercising the real OR-lookup.)
+        assertThat(adminUsers.findByUsernameIgnoreCaseOrEmailIgnoreCase(target.email(), target.email())).isEmpty();
+        assertThat(adminUsers.existsByEmailIgnoreCase(target.email())).isFalse();
+    }
+
+    @Test
+    void delete_preservesRoleAssignmentRatherThanCascadingItAway() {
+        UUID actorId = createSuperAdminActor();
+        AdminRoleResponse role = createRoleAsSuperAdmin("Preserved Role " + unique(), null, List.of());
+        AdminStaffResponse target = createStaffAsSuperAdmin("Staffer With Role", List.of(role.id()));
+
+        actingAs(actorId, () -> staffService.delete(target.id(), "127.0.0.1", "JUnit"));
+
+        // Queried directly (bypasses the now-@SQLRestriction-filtered AdminUser entity entirely) -
+        // proves the admin_user_role row physically survives rather than cascading away.
+        Integer roleAssignmentCount = jdbcTemplate.queryForObject(
+                "select count(*) from admin_user_role where admin_user_id = ?", Integer.class, target.id());
+        assertThat(roleAssignmentCount).isEqualTo(1);
+    }
+
+    @Test
+    void delete_thenUsernameAndEmailBecomeAvailableForANewAdmin() {
+        UUID actorId = createSuperAdminActor();
+        String username = "reusable-" + unique();
+        String email = "reusable-" + unique() + "@example.com";
+        AdminStaffResponse original = actingAs(actorId, () -> staffService.create(
+                new CreateAdminStaffRequest(username, email, "Original Holder", null, List.of()), "127.0.0.1", "JUnit"));
+
+        actingAs(actorId, () -> staffService.delete(original.id(), "127.0.0.1", "JUnit"));
+
+        assertThatCode(() -> actingAs(actorId, () -> staffService.create(
+                new CreateAdminStaffRequest(username, email, "New Holder", null, List.of()), "127.0.0.1", "JUnit")))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void delete_targetingASuperAdmin_isRejected() {
+        UUID actorId = createSuperAdminActor();
+        UUID superAdminTarget = createSuperAdminActor();
+
+        actingAs(actorId, () -> assertThatThrownBy(() -> staffService.delete(superAdminTarget, "127.0.0.1", "JUnit"))
+                .isInstanceOf(BusinessRuleException.class));
+    }
+
+    @Test
+    void delete_targetingYourself_isRejected() {
+        AdminStaffResponse self = createStaffAsSuperAdmin("Self Deleter", List.of());
+
+        actingAs(self.id(), () -> assertThatThrownBy(() -> staffService.delete(self.id(), "127.0.0.1", "JUnit"))
+                .isInstanceOf(BusinessRuleException.class));
+    }
+
+    private AuthTokens loginFully(AdminStaffResponse staff) {
         LoginResult login = authService.login(staff.email(), "BrandNew@12345", "127.0.0.1", "JUnit");
         String otp = extractOtp(emailSender.last().htmlBody());
         return authService.verifyOtp(login.challengeId(), otp, "127.0.0.1", "JUnit");
