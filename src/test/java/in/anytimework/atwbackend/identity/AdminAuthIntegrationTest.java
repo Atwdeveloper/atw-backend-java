@@ -144,14 +144,11 @@ class AdminAuthIntegrationTest {
     }
 
     @Test
-    void wrongPasswordIsRejectedAndCounted() {
+    void wrongPasswordIsRejected() {
         AdminUser admin = createAdmin("Secret@12345", "Sub Admin");
 
         assertThatThrownBy(() -> authService.login(admin.getEmail(), "WrongPass@1", "127.0.0.1", "JUnit"))
                 .isInstanceOf(UnauthorizedException.class);
-
-        AdminUser reloaded = adminUsers.findById(admin.getId()).orElseThrow();
-        assertThat(reloaded.getFailedLoginAttempts()).isEqualTo(1);
     }
 
     @Test

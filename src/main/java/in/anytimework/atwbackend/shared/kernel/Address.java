@@ -1,8 +1,6 @@
 package in.anytimework.atwbackend.shared.kernel;
 
-import in.anytimework.atwbackend.shared.security.EncryptedStringConverter;
 import jakarta.persistence.Column;
-import jakarta.persistence.Convert;
 import jakarta.persistence.Embeddable;
 import lombok.Getter;
 
@@ -10,26 +8,31 @@ import java.util.UUID;
 
 /**
  * Reusable address shape, embedded into each owning module's own address table (e.g.
- * {@code admin_user_address}, later {@code company_address}/{@code worker_address}) rather than
+ * {@code admin_user_address}, {@code worker_address}, later {@code company_address}) rather than
  * living in a shared table of its own - each module stays the sole owner of its rows and keeps its
  * own foreign key, per the one-owner-per-table rule.
  *
  * <p>{@code stateId}/{@code cityId} are plain UUIDs into the masterdata module, never a JPA
- * relationship. Free-text lines are PII (they reveal where someone lives) and are encrypted at
- * rest the same way KYC numbers are; state/city/pincode are not identifying on their own and stay
- * plain so they remain usable in lookups and indexes. {@code latitude}/{@code longitude}/
- * {@code formattedAddress} are schema groundwork for a future geocoding adapter - unpopulated
- * until that exists.</p>
+ * relationship. {@code latitude}/{@code longitude}/{@code formattedAddress} are schema groundwork
+ * for a future geocoding adapter - unpopulated until that exists.</p>
+ *
+ * <p><strong>Stored as plain text, not encrypted</strong> - confirmed with the developer 2026-11-13,
+ * a deliberate choice treating a free-text address line as lower-sensitivity than an Aadhaar/PAN/bank
+ * number (which stay encrypted via {@code EncryptedStringConverter}/{@code WorkerEncryptedStringConverter}
+ * on their own entities). Earlier in this project's history {@code Address} briefly carried its own
+ * {@code @Convert}, before encryption was removed entirely from this embeddable - no entity embedding
+ * {@code Address} should add one back without the same explicit confirmation this change itself got,
+ * since the per-consumer-key machinery ({@code PiiEncryptionConfig}) this would need to resurrect had
+ * its own prior bug (one consumer silently inheriting another's key) that is simplest to never
+ * reintroduce at all.</p>
  */
 @Getter
 @Embeddable
 public class Address {
 
-    @Convert(converter = EncryptedStringConverter.class)
     @Column(name = "line1", length = 255)
     private String line1;
 
-    @Convert(converter = EncryptedStringConverter.class)
     @Column(name = "line2", length = 255)
     private String line2;
 

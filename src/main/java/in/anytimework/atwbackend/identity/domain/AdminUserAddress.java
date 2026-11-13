@@ -15,6 +15,11 @@ import java.util.UUID;
  * or worker (permanent/current) there is no address-type column here; one would carry no
  * information. A separate table from {@link AdminUserProfile}, same reasoning as
  * {@link AdminUserKyc}: its own optional row, independently evolvable schema.
+ *
+ * <p>Stored as plain text, not encrypted - confirmed with the developer 2026-11-13. This is a
+ * deliberate difference from {@link AdminUserKyc}/{@link AdminUserBankDetail}, which stay encrypted:
+ * an address is considered lower-sensitivity than an Aadhaar/PAN/UAN/PF/ESIC number or a bank account
+ * number. See {@code Address}'s Javadoc for the embeddable's own note on this.</p>
  */
 @Getter
 @Entity

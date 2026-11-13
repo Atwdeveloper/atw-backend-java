@@ -1,0 +1,2474 @@
+{
+  "info": {
+    "name": "ATW Backend — RBAC & Staff Management",
+    "description": "# ATW Backend — RBAC & Staff Management\n\nRole/permission administration and full lifecycle management of *other* admin/staff accounts: create,\nlist, update, activate/deactivate, delete, plus each staff member's profile, address, KYC, and\nbank-detail sub-resources. This is the **admin side only** — ATW's own internal platform\nstaff/employees, not workers or companies. For logging in, 2FA, and a caller's own account\nself-service, see **ATW-Auth-Account.postman_collection.json**; for departments/industries/\ndesignations/skills/minimum-wage reference data, see **ATW-Masterdata.postman_collection.json**.\n\n**Run order:** Permissions has no dependencies - run **Permission Catalog** any time to see the\ncodes available for `permissionCodes[]` (Roles) / `roleIds[]` (Staff). Roles > **Create Role** next,\nwhich saves `{{roleId}}` - a role should exist before Staff > **Create Staff** assigns one.\n**Create Staff** then saves `{{staffId}}` for every Staff sub-resource request below it\n(profile/address/KYC/bank-detail) and for **Set Staff Status** / **Delete Staff**.\n\n**Shared conventions across every request in this folder:**\n- The privilege-escalation guard (`PermissionEscalationGuard`) is identical everywhere a permission\n  set is granted - Roles > Create/Update Role, and Staff > Create/Update Staff. A non-super-admin\n  can never grant a permission, directly or via a role, that they don't currently hold themselves;\n  super-admins are exempt.\n- `admin_staff.view` alone always returns KYC values and the bank account number **masked** (all\n  but the last 4 characters, e.g. `\"********9012\"`); the specific extra permission needed to see\n  them unmasked is named on each of those two requests. Senior Developer and Junior Developer are\n  the only seed roles that hold both by default.\n- A status-change endpoint always takes an explicit target value (e.g. `status: \"ACTIVE\"|\"DISABLED\"`),\n  never a blind toggle - the same two-quick-calls-can't-race reasoning as every status endpoint in\n  Masterdata.\n- **Delete is not uniform across this one file.** Staff > **Delete Staff** **soft**-deletes (sets\n  `deletedAt`; the row and every satellite table - profile/address/KYC/bank-detail/role assignments -\n  survive) as of the `V29__admin_user_soft_delete.sql` migration. Roles > **Delete Role** remains a\n  **hard**, permanent delete. Don't assume the two \"delete\" verbs in this collection behave the\n  same way.\n- Staff address (`line1`/`line2`) is stored as **plain text, not encrypted** (confirmed with the\n  developer 2026-11-13). KYC numbers and the bank account number remain **encrypted at rest**\n  (AES-256-GCM) - don't conflate the two sub-resources' at-rest protection; only the latter two use it.\n\nEvery endpoint is versioned under `/api/v1/` and returns the same envelope:\n\n```\n{ \"success\": boolean, \"data\": <payload> | null, \"error\": <ApiError> | null }\n```\n\n`ApiError` shape: `{\"code\": string, \"message\": string, \"fieldErrors\": [{\"field\",\"message\"}] | null, \"timestamp\": ISO-8601 string, \"traceId\": string | null}`. `fieldErrors` is populated only for `VALIDATION_ERROR` responses that came from `@Valid` request-body validation; it's `null`/omitted for every other error, including other `VALIDATION_ERROR` responses raised programmatically (e.g. \"Unknown permission code(s)\"). `traceId` echoes the `X-Correlation-Id` request header when present — include it when reporting a bug.\n\n## Running this collection\n\nSelect the **ATW Backend - Local** environment first, and run **Login** / **Verify OTP** from the\nAuth & Account collection to populate `{{accessToken}}` — every request here requires it.\nRequests are grouped Permissions → Roles → Staff, roughly the order you'd run them in:\n\n1. **Permissions > Permission Catalog** — lists every `admin_permission` row; use it to populate the\n   `permissionCodes[]` array when creating/updating a role below.\n2. **Roles > Create Role** saves `{{roleId}}` for the Get/Update/Delete requests below it.\n3. **Staff > Create Staff** saves `{{staffId}}` for every Staff sub-resource request below it\n   (profile/address/KYC/bank-detail), and returns an `{{inviteToken}}`-bearing invite email (or\n   server log locally) — use **Accept Invite** in the Auth & Account collection to set that new staff\n   member's password.\n4. A caller can never grant a permission they don't themselves hold — this applies to both\n   Create/Update Role and assigning `roleIds` on Create/Update Staff (super-admins are exempt).\n\n## Error codes that can appear on (almost) any endpoint\n\nThese are produced centrally — by `GlobalExceptionHandler`, by Spring Security's entry point / access-denied handler, or by the two security filters that run before a controller is even reached — so they are **not** re-documented on every individual request below; only an endpoint's *specific* codes and triggers are. Two pairs are easy to confuse and worth reading carefully:\n\n| Code | HTTP | Meaning |\n|---|---|---|\n| `VALIDATION_ERROR` | 400 | A `@Valid` request-body field failed Bean Validation (`fieldErrors[]` present), or a service-level input check failed (no `fieldErrors`). |\n| `MALFORMED_REQUEST` | 400 | Request body is missing or isn't valid JSON. |\n| `UNSUPPORTED_MEDIA_TYPE` | 415 | `Content-Type` isn't `application/json`. |\n| `UNAUTHENTICATED` | 401 | **No bearer token was presented at all**, or it's malformed/expired/signature-invalid. Produced by Spring Security itself, before any controller runs. |\n| `UNAUTHORIZED` | 401 | A **business-level** auth failure on an endpoint that doesn't require a token in the first place — bad login credentials, a locked/disabled account, an invalid refresh/reset/invite token. Same HTTP status as `UNAUTHENTICATED` above, different meaning: this means \"the token/credential you supplied is bad\", not \"you supplied nothing\". |\n| `SESSION_REVOKED` | 401 | The bearer token parses fine, but the admin's `security_version` has moved on since it was issued (password changed/reset, or their role assignment changed), or the account is no longer `ACTIVE`. The client must discard tokens and log in again — refreshing won't help, the refresh token was revoked too. |\n| `MUST_CHANGE_PASSWORD` | 403 | Authenticated, but the token's `mustChangePassword` flag is set and this isn't `/admin/account/me` or `/admin/account/change-password`. |\n| `ACCESS_DENIED` | 403 | Authenticated, but lacking the specific permission the endpoint requires. |\n| `RATE_LIMITED` | 429 | Too many requests to one of the 6 public, abuse-prone auth endpoints from the same IP within the window — default 10 requests/60s, **per endpoint**, not pooled across them. |\n| `NOT_FOUND` | 404 | The **URL itself** doesn't match any endpoint (a routing miss — typo'd path, wrong version prefix, etc). |\n| `RESOURCE_NOT_FOUND` | 404 | The URL is valid, but the specific id in it (a staff id, role id, ...) doesn't exist. Different from `NOT_FOUND` above — don't conflate \"no such route\" with \"no such record\". |\n| `METHOD_NOT_ALLOWED` | 405 | Right URL, wrong HTTP verb. |\n| `BUSINESS_RULE_VIOLATION` | 422 | Input is syntactically well-formed but violates a business rule (e.g. \"system roles cannot be modified\", a privilege-escalation attempt, self/super-admin protection). |\n| `CONFLICT` | 409 | Either an endpoint's own duplicate check (most common — a friendlier, specific message), or a generic last-resort safety net when a unique-constraint violation reaches the database despite an earlier application-level check passing (a genuine race between two concurrent requests) — that fallback case always carries the same generic message, regardless of which field collided. |\n| `INTERNAL_ERROR` | 500 | Unexpected failure. Full detail (stack trace) is logged server-side against the same `traceId` returned to the client; never returned in the response body itself. |\n\n## Documentation cross-references\n\n- **ATW-Auth-Account.postman_collection.json** — login/2FA and a caller's own account self-service.\n- **ATW-Masterdata.postman_collection.json** — departments/industries/designations/skills/minimum-wage\n  reference data.\n- `FRONTEND_HANDOVER.md` — see its \"Staff\" and \"Roles\" sections for the table-form reference. As of\n  this write-up that doc still describes Delete Staff without the soft-delete mechanism documented\n  here (`AdminStaffService.delete()` / `V29__admin_user_soft_delete.sql`) — worth reconciling there too.\n- `HANDOVER.md` — broader project handover context, including what's explicitly **out of scope** today\n  (worker/company auth, an audit-log read API, session/device listing, a resend-invite endpoint).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "item": [
+    {
+      "name": "Permissions",
+      "description": "Permission-gated endpoints that don't belong to one specific CRUD resource. Requires `Authorization: Bearer {{accessToken}}` and the named permission (or super-admin).",
+      "item": [
+        {
+          "name": "Permission Catalog",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/permissions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "permissions"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.view`.\n\nReturns the full permission catalog grouped by module — `[{module, permissions: [{code, action, label}]}]`, ordered by module then action — for building a role editor's permission matrix (checkbox grid). There are currently ~23 modules covering every business area (companies, workers, vacancy, payroll, agent, staff, roles, ...); `staff` and `roles` are the two modules relevant to this collection (7 and 4 permission codes respectively).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `admin_roles.view` | `ACCESS_DENIED` | 403 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Catalog excerpt",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/permissions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "permissions"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": [\n    {\n      \"module\": \"admin_roles\",\n      \"permissions\": [\n        {\n          \"code\": \"admin_roles.create\",\n          \"action\": \"create\",\n          \"label\": \"create\"\n        },\n        {\n          \"code\": \"admin_roles.delete\",\n          \"action\": \"delete\",\n          \"label\": \"delete\"\n        },\n        {\n          \"code\": \"admin_roles.edit\",\n          \"action\": \"edit\",\n          \"label\": \"edit\"\n        },\n        {\n          \"code\": \"admin_roles.view\",\n          \"action\": \"view\",\n          \"label\": \"view\"\n        }\n      ]\n    },\n    {\n      \"module\": \"admin_staff\",\n      \"permissions\": [\n        {\n          \"code\": \"admin_staff.create\",\n          \"action\": \"create\",\n          \"label\": \"create\"\n        },\n        {\n          \"code\": \"admin_staff.delete\",\n          \"action\": \"delete\",\n          \"label\": \"delete\"\n        },\n        {\n          \"code\": \"admin_staff.edit\",\n          \"action\": \"edit\",\n          \"label\": \"edit\"\n        },\n        {\n          \"code\": \"admin_staff.toggle_status\",\n          \"action\": \"toggle_status\",\n          \"label\": \"toggle_status\"\n        },\n        {\n          \"code\": \"admin_staff.view\",\n          \"action\": \"view\",\n          \"label\": \"view\"\n        },\n        {\n          \"code\": \"admin_staff.view_bank_details\",\n          \"action\": \"view_bank_details\",\n          \"label\": \"view_bank_details\"\n        },\n        {\n          \"code\": \"admin_staff.view_kyc\",\n          \"action\": \"view_kyc\",\n          \"label\": \"view_kyc\"\n        }\n      ]\n    }\n  ],\n  \"error\": null\n}"
+            },
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/permissions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "permissions"
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:20:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Roles",
+      "description": "Role CRUD and permission assignment, under `/api/v1/admin/roles/**`. Requires `Authorization: Bearer {{accessToken}}` and the matching `admin_roles.*` permission (`admin_roles.view`/`create`/`edit`/`delete` — 4 codes total).\n\n**Privilege-escalation guard** (`PermissionEscalationGuard`, shared with Staff's role-assignment check below): a non-super-admin can never create or edit a role to grant a permission they don't themselves currently hold. This closes a real gap — without it, someone holding `admin_roles.create`/`admin_roles.edit` but not `admin_staff.edit` could still define a role with more power than their own and have it take effect the moment *anyone* assigns it, including editing permissions onto a role that's already assigned to staff. Super-admins are exempt (they implicitly hold every permission).\n\n**System roles** (`systemRole: true`): when set, a role is protected from Update and Delete, but can still be *assigned to* or *removed from* staff normally.\n\n**Corrected from this collection's previous description:** no endpoint here — including Create Role — can ever produce `systemRole: true`; `AdminRoleService.create()` always passes `false`. Per the seed migration (`V4__identity.sql`), none of today's 4 legacy roles (Sub Admin, Relationship Manager, Senior Developer, Junior Developer) are actually flagged as system roles — all 4 were inserted with `is_system = FALSE` and nothing has updated that since. Right now, every role, seed or not, can be renamed or deleted like any other (Delete Role's own \"staff still assigned\" check is the only practical protection most of these 4 have today). Flagging this for the developer in case seeding one or more of them as `is_system = true` was the actual original intent.",
+      "item": [
+        {
+          "name": "List Roles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.view`.\n\nReturns every role with its full `permissionCodes` list (no pagination — the role count is small and operator-managed, not user-generated)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": [\n    {\n      \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n      \"name\": \"Senior Developer\",\n      \"description\": \"Full operational access across modules including configuration, payroll, reports and face enrollment.\",\n      \"systemRole\": false,\n      \"permissionCodes\": [\n        \"admin_staff.view\",\n        \"admin_staff.view_bank_details\",\n        \"admin_staff.view_kyc\"\n      ]\n    },\n    {\n      \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n      \"name\": \"QA Tester\",\n      \"description\": \"Read-only access for QA\",\n      \"systemRole\": false,\n      \"permissionCodes\": [\n        \"dashboard.view\"\n      ]\n    }\n  ],\n  \"error\": null\n}"
+            },
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:20:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Role",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles",
+                "{{roleId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.view`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| No role with this id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles",
+                    "{{roleId}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n    \"name\": \"QA Tester\",\n    \"description\": \"Read-only access for QA\",\n    \"systemRole\": false,\n    \"permissionCodes\": [\n      \"dashboard.view\",\n      \"workers.view\"\n    ]\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown role id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles",
+                    "{{roleId}}"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Role not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:20:30Z\",\n    \"traceId\": \"b2c3d4e5f6071829\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create Role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.create`.\n\n**Validation**\n- `name` — required, non-blank, max 100 chars.\n- `description` — optional, max 300 chars.\n- `permissionCodes` — required list (can be empty `[]` for a role with no permissions yet), each entry non-blank.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | `name` already used by another role | `CONFLICT` | 409 |\n| 2 | Any `permissionCodes` entry doesn't exist in the catalog | `VALIDATION_ERROR` | 400 — lists the unknown code(s) by name |\n| 3 | Caller is not a super-admin AND `permissionCodes` includes anything they don't themselves currently hold | `BUSINESS_RULE_VIOLATION` | 422 — \"You cannot grant a permission you do not hold yourself.\" |\n\nStep 2 runs before step 3 deliberately, so a typo'd permission code reports as \"unknown code\" rather than a confusing \"you don't hold this [nonexistent] permission\".\n\n**On success:** creates a non-system role (`systemRole: false` — see the folder description for why this is the *only* value Create Role can ever produce), audits `ROLE_CREATED`. This request's Tests script saves the new id to `{{roleId}}`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Read-only access for QA\",\n  \"permissionCodes\": [\n    \"dashboard.view\",\n    \"workers.view\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('roleId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Read-only access for QA\",\n  \"permissionCodes\": [\n    \"dashboard.view\",\n    \"workers.view\"\n  ]\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n    \"name\": \"QA Tester\",\n    \"description\": \"Read-only access for QA\",\n    \"systemRole\": false,\n    \"permissionCodes\": [\n      \"dashboard.view\",\n      \"workers.view\"\n    ]\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - Unknown permission code",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Read-only access for QA\",\n  \"permissionCodes\": [\n    \"dashboard.view\",\n    \"workers.view\"\n  ]\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Unknown permission code(s): dashboard.viewx\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:21:10Z\",\n    \"traceId\": \"b2c3d4e5f6071829\"\n  }\n}"
+            },
+            {
+              "name": "422 - Escalation blocked",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Read-only access for QA\",\n  \"permissionCodes\": [\n    \"dashboard.view\",\n    \"workers.view\"\n  ]\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"You cannot grant a permission you do not hold yourself.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:21:45Z\",\n    \"traceId\": \"b2c3d4e5f607182a\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Role",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles",
+                "{{roleId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.edit`.\n\nFull replace of the role's name, description, and entire permission set (not a merge/patch) — omitted codes are *removed* from the role.\n\n**Validation:** identical to Create Role.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | Role id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| 2 | Role is a system role (`systemRole: true`) | `BUSINESS_RULE_VIOLATION` | 422 — \"System roles cannot be modified.\" |\n| 3 | `name` already used by a *different* role | `CONFLICT` | 409 |\n| 4 | Unknown permission code | `VALIDATION_ERROR` | 400 |\n| 5 | Escalation (same rule as Create Role) | `BUSINESS_RULE_VIOLATION` | 422 |\n\n**Important, non-obvious side effect:** every admin currently assigned this role keeps whatever permissions they had **until their access token naturally expires or they make a new authenticated request** — there's no proactive re-login forced here, unlike changing a *staff member's* role assignment (see Update Staff), which does force one. Editing a role's permissions is a slower-moving admin operation; if this surprises you operationally, treat it as something to flag, not rely on silently.\n\n**Note on step 2:** per the seed migration (`V4__identity.sql`), none of today's 4 legacy roles (Sub Admin, Relationship Manager, Senior Developer, Junior Developer) are actually flagged `systemRole: true` — see the folder description. Step 2 is real, enforced code; it simply has no seeded role to trigger against today.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Updated description\",\n  \"permissionCodes\": [\n    \"dashboard.view\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles",
+                    "{{roleId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Updated description\",\n  \"permissionCodes\": [\n    \"dashboard.view\"\n  ]\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n    \"name\": \"QA Tester\",\n    \"description\": \"Updated description\",\n    \"systemRole\": false,\n    \"permissionCodes\": [\n      \"dashboard.view\"\n    ]\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Target is a system role",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles",
+                    "{{roleId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"QA Tester\",\n  \"description\": \"Updated description\",\n  \"permissionCodes\": [\n    \"dashboard.view\"\n  ]\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"System roles cannot be modified.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:22:00Z\",\n    \"traceId\": \"d4e5f6071829303a\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Role",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "roles",
+                "{{roleId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_roles.delete`.\n\n**Behavior / errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Role id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Role is a system role | `BUSINESS_RULE_VIOLATION` | 422 — \"System roles cannot be deleted.\" |\n| One or more staff members are still assigned this role | `CONFLICT` | 409 — \"Cannot delete role: N staff member(s) are currently assigned to it. Reassign them first.\" |\n\n**No soft-delete / archive** for roles — a successful delete is permanent (contrast with Staff > Delete Staff, which *does* soft-delete). There is intentionally no cascade-reassignment; the caller must move affected staff to a different role first (via Update Staff), which is the safer default for an access-control resource."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles",
+                    "{{roleId}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": null,\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - Staff still assigned",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/roles/{{roleId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "roles",
+                    "{{roleId}}"
+                  ]
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"Cannot delete role: 3 staff member(s) are currently assigned to it. Reassign them first.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:22:30Z\",\n    \"traceId\": \"e5f6071829303a4b\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Staff",
+      "description": "Staff/admin account CRUD, role assignment, and the profile/address/KYC/bank-detail sub-resources, under `/api/v1/admin/staff/**`. Requires `Authorization: Bearer {{accessToken}}` and the matching `admin_staff.*` permission (7 codes: `view`/`create`/`edit`/`delete`/`toggle_status`/`view_kyc`/`view_bank_details`).\n\nSame privilege-escalation guard as Roles applies whenever this module assigns roles to a staff member (Create/Update Staff): you cannot hand out a role carrying a permission you don't hold yourself.\n\n**KYC and bank-account-number reads are masked** (all but the last 4 characters replaced with `*`) unless the caller additionally holds `admin_staff.view_kyc` / `admin_staff.view_bank_details` — by default only the **Senior Developer** and **Junior Developer** seed roles hold those two (the same two roles that hold the equivalent sensitive-data permissions for workers, e.g. `workers.view_wallet`). Both values are also **encrypted at rest** (AES-256-GCM) independently of masking — masking controls what a given API caller sees; encryption protects the data if the database itself is ever compromised. The two controls are intentionally layered, not redundant.\n\n**Staff address is a separate matter: plain text, not encrypted** (a deliberate 2026-11-13 change) — see Get/Update Staff Address below. Don't assume address shares KYC's encryption just because it lives in the same controller.\n\nProfile/address/KYC/bank-detail rows are **not** created by Create Staff — they start fully empty (every field `null`) and are populated later via their own PUT endpoints, independently and progressively.\n\n**No single caller-is-super-admin requirement anywhere in this folder** — verified against `AdminStaffService`: every guard here protects a *target* super-admin account (or the caller's own account) from being modified/disabled/deleted; none of these endpoints require the *caller* to be a super-admin. There is also no \"blacklist\"-style status beyond `ACTIVE`/`DISABLED` (see `AdminStatus.java`).",
+      "item": [
+        {
+          "name": "List Staff",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff?page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view`.\n\nStandard Spring pagination via query params: `page` (0-based), `size`, `sort` (e.g. `sort=fullName,asc`). If `page`/`size` are omitted entirely, the application-wide default applies - `size` defaults to **100** (capped at a hard ceiling of **500**), set by `spring.data.web.pageable.default-page-size` / `max-page-size` in `application.properties`; this is not something any individual endpoint overrides. Returns a `PageResponse<AdminStaffResponse>`: `{content: [...], page, size, totalElements, totalPages, first, last}`. KYC/bank fields are **not** included here — fetch them per-staff-member via the sub-resource endpoints below."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff?page=0&size=20",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "0"
+                    },
+                    {
+                      "key": "size",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n        \"username\": null,\n        \"email\": \"new.staff@example.com\",\n        \"fullName\": \"New Staff Member\",\n        \"phone\": null,\n        \"superAdmin\": false,\n        \"status\": \"ACTIVE\",\n        \"roles\": [\n          {\n            \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n            \"name\": \"QA Tester\"\n          }\n        ],\n        \"lastLoginAt\": null,\n        \"createdAt\": \"2026-10-24T10:23:00Z\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 20,\n    \"totalElements\": 1,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff?page=0&size=20",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "0"
+                    },
+                    {
+                      "key": "size",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:22:00Z\",\n    \"traceId\": \"c3d4e5f607182930\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Staff",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view`.\n\nReturns `AdminStaffResponse`: `{id, username, email, fullName, phone, superAdmin, status, roles: [{id, name}], lastLoginAt, createdAt}`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| No staff member with this id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n    \"username\": null,\n    \"email\": \"new.staff@example.com\",\n    \"fullName\": \"New Staff Member\",\n    \"phone\": null,\n    \"superAdmin\": false,\n    \"status\": \"ACTIVE\",\n    \"roles\": [\n      {\n        \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n        \"name\": \"QA Tester\"\n      }\n    ],\n    \"lastLoginAt\": null,\n    \"createdAt\": \"2026-10-24T10:23:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown staff id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Staff member not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:30:00Z\",\n    \"traceId\": \"f6071829303a4b5c\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create Staff",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.create`.\n\n**Validation**\n- `username` — optional, max 100 chars. An empty string (`\"\"`) is treated identically to `null`/omitted (normalized to `NULL` in storage) — so two staff can both be created with \"no username\" without colliding on the unique constraint.\n- `email` — required, valid email format, max 320 chars.\n- `fullName` — required, non-blank, max 150 chars.\n- `phone` — optional, max 20 chars.\n- `roleIds` — required list (can be `[]`), each a UUID of an existing role.\n\n**No `password` field** — the account is created with a random, cryptographically-generated, never-disclosed password (`mustChangePassword` starts `true`), and an invite email (template `ADMIN_STAFF_INVITE`) is sent with a set-password link — the recipient completes onboarding via **Auth > Accept Invite**. **No `superAdmin` field either** — that flag stays bootstrap-only (seeded at application startup) and is never settable through this API.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | `email` already belongs to another admin (case-insensitive) | `CONFLICT` | 409 |\n| 2 | `username` provided and already taken (case-insensitive) | `CONFLICT` | 409 |\n| 3 | Any `roleIds` entry doesn't exist | `VALIDATION_ERROR` | 400 — \"One or more role ids do not exist.\" |\n| 4 | Caller is not a super-admin AND the union of the requested roles' permissions includes anything the caller doesn't themselves hold | `BUSINESS_RULE_VIOLATION` | 422 — same escalation guard as Roles |\n\n**On success:** audits `ADMIN_STAFF_CREATED`. This request's Tests script saves the new id to `{{staffId}}`. Profile/address/KYC/bank-detail rows are **not** created here — they start out empty (all-null) and are set separately via the sub-resource endpoints below.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": null,\n  \"email\": \"new.staff@example.com\",\n  \"fullName\": \"New Staff Member\",\n  \"phone\": null,\n  \"roleIds\": [\n    \"{{roleId}}\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('staffId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": null,\n  \"email\": \"new.staff@example.com\",\n  \"fullName\": \"New Staff Member\",\n  \"phone\": null,\n  \"roleIds\": [\n    \"{{roleId}}\"\n  ]\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n    \"username\": null,\n    \"email\": \"new.staff@example.com\",\n    \"fullName\": \"New Staff Member\",\n    \"phone\": null,\n    \"superAdmin\": false,\n    \"status\": \"ACTIVE\",\n    \"roles\": [\n      {\n        \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n        \"name\": \"QA Tester\"\n      }\n    ],\n    \"lastLoginAt\": null,\n    \"createdAt\": \"2026-10-24T10:23:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - Duplicate email",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": null,\n  \"email\": \"new.staff@example.com\",\n  \"fullName\": \"New Staff Member\",\n  \"phone\": null,\n  \"roleIds\": [\n    \"{{roleId}}\"\n  ]\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"An admin with this email already exists.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:23:30Z\",\n    \"traceId\": \"d4e5f6071829303a\"\n  }\n}"
+            },
+            {
+              "name": "422 - Escalation blocked",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": null,\n  \"email\": \"new.staff@example.com\",\n  \"fullName\": \"New Staff Member\",\n  \"phone\": null,\n  \"roleIds\": [\n    \"{{roleId}}\"\n  ]\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"You cannot grant a permission you do not hold yourself.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:31:00Z\",\n    \"traceId\": \"071829303a4b5c6d\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Staff",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit`.\n\nFull replace of `username`/`fullName`/`phone`/roles. **`email` is intentionally not editable here** — changing a login identifier is treated as a bigger decision than a routine profile edit (not currently exposed through any endpoint).\n\n**Validation:** same as Create Staff, minus `email`.\n\n**Behavior / errors** (checked in this order)\n\n| Order | Condition | Code | HTTP |\n|---|---|---|---|\n| 1 | Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| 2 | Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 — \"Super-admin accounts cannot be modified through this endpoint.\" |\n| 3 | `username` provided, changed, and already taken by someone else | `CONFLICT` | 409 |\n| 4 | Unknown role id | `VALIDATION_ERROR` | 400 |\n| 5 | Escalation (same rule as Create Staff) | `BUSINESS_RULE_VIOLATION` | 422 |\n\n**Side effect — forced re-login, but only when roles actually changed:** if the new role set differs from what the staff member had before, their `security_version` is bumped and every refresh token they hold is revoked, so a permission *removal* takes effect immediately instead of riding out the access token's remaining TTL (up to 15 min). A plain name/phone edit with the same roles does **not** trigger this — don't expect a re-login just from editing `fullName`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": null,\n  \"fullName\": \"Updated Name\",\n  \"phone\": null,\n  \"roleIds\": [\n    \"{{roleId}}\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": null,\n  \"fullName\": \"Updated Name\",\n  \"phone\": null,\n  \"roleIds\": [\n    \"{{roleId}}\"\n  ]\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n    \"username\": null,\n    \"email\": \"new.staff@example.com\",\n    \"fullName\": \"Updated Name\",\n    \"phone\": null,\n    \"superAdmin\": false,\n    \"status\": \"ACTIVE\",\n    \"roles\": [\n      {\n        \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n        \"name\": \"QA Tester\"\n      }\n    ],\n    \"lastLoginAt\": null,\n    \"createdAt\": \"2026-10-24T10:23:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Target is a super-admin account",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"username\": null,\n  \"fullName\": \"Updated Name\",\n  \"phone\": null,\n  \"roleIds\": [\n    \"{{roleId}}\"\n  ]\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Super-admin accounts cannot be modified through this endpoint.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:32:00Z\",\n    \"traceId\": \"1829303a4b5c6d7e\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Set Staff Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "status"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.toggle_status`.\n\n**Validation**\n- `status` — required. `status` must be exactly `\"ACTIVE\"` or `\"DISABLED\"` — an explicit target, not a toggle, so two quick successive calls can't race into an unintended end state.\n\n**Behavior / errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 — \"Super-admin accounts cannot be deactivated through this endpoint.\" (message substitutes \"activated\" when `status: \"ACTIVE\"`) |\n| Target is **your own** account | `BUSINESS_RULE_VIOLATION` | 422 — \"You cannot deactivate your own account.\" (same substitution) |\n\n**Side effect:** setting `DISABLED` immediately revokes every refresh token for that admin (so no new access token can be minted), **and** any access token they're still mid-use with is rejected on its very next request — `AdminSessionPolicyFilter` checks `active` status on every authenticated call, not just at token-issue time. There's no lag waiting for the current token to expire, unlike Logout's known limitation (see Auth & Account collection).\n\nAudits `STAFF_STATUS_CHANGED` with the before→after transition.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"DISABLED\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/status",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "status"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"DISABLED\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\",\n    \"username\": null,\n    \"email\": \"new.staff@example.com\",\n    \"fullName\": \"New Staff Member\",\n    \"phone\": null,\n    \"superAdmin\": false,\n    \"status\": \"DISABLED\",\n    \"roles\": [\n      {\n        \"id\": \"3fa85f64-5717-4562-b3fc-2c963f66afa6\",\n        \"name\": \"QA Tester\"\n      }\n    ],\n    \"lastLoginAt\": null,\n    \"createdAt\": \"2026-10-24T10:23:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Cannot disable self",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/status",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "status"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"DISABLED\"\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"You cannot deactivate your own account.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:24:15Z\",\n    \"traceId\": \"e5f6071829303a4b\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Staff",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.delete`.\n\n**Behavior / errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 — \"Super-admin accounts cannot be deleted through this endpoint.\" |\n| Target is your own account | `BUSINESS_RULE_VIOLATION` | 422 — \"You cannot delete your own account.\" |\n\n**Soft delete, corrected from this collection's previous description** (which described a hard delete — that stopped being accurate with the `V29__admin_user_soft_delete.sql` migration). `AdminStaffService.delete()` now sets `deletedAt` (`AdminUser.markDeleted`) rather than ever issuing a real SQL `DELETE`. `AdminUser`'s `@SQLRestriction(\"deleted_at is null\")` then makes this admin invisible to every existing query path (`findById`, login lookups, the pessimistic-lock JPQL) automatically, with no other method needing to check a \"deleted\" flag itself.\n\nEvery one of this admin's own satellite rows — profile, address, KYC (including PF/ESIC numbers that may be needed for post-departure statutory reporting), bank detail, and role assignments — is left **completely untouched**; nothing is cascaded away, preserving full history for audit/reconciliation. The deleted admin's username and email both become available again for a new hire to be created with (a partial unique index scoped to `deleted_at IS NULL`). Past audit log entries referencing this admin are **not** affected: `admin_audit_log.actor_admin_id` becomes `NULL`, but `actor_email` is a point-in-time snapshot captured when each log entry was originally written, so \"who did this\" in historical audit records stays readable even after the actor is deleted. There is deliberately no restore/undelete endpoint yet — nothing is destroyed, so one can be added later purely at the application layer, with no migration changes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK (soft-deleted)",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": null,\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Cannot delete self",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}"
+                  ]
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"You cannot delete your own account.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:33:00Z\",\n    \"traceId\": \"29303a4b5c6d7e8f\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Staff Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "profile"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view`.\n\nReturns `{dateOfBirth, gender}` — every field is `null` until explicitly set via Update Staff Profile (there's no profile row created automatically by Create Staff). Not sensitive data; never masked, no extra permission needed beyond `admin_staff.view`.\n\n**Note:** address used to live on this DTO (`addressLine`, `pincode`) — it's now its own sub-resource with real `stateId`/`cityId` foreign keys instead of a free-text line, see Get/Update Staff Address below.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "profile"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"dateOfBirth\": \"1995-06-15\",\n    \"gender\": \"FEMALE\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "200 - OK (nothing saved yet)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "profile"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"dateOfBirth\": null,\n    \"gender\": null\n  },\n  \"error\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Staff Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "profile"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit`.\n\n**Validation** — every field optional (captured progressively, not necessarily all at once); send `null` for any field you don't want to set yet.\n- `dateOfBirth` — ISO date (`YYYY-MM-DD`), no past/future constraint enforced.\n- `gender` — one of `MALE` / `FEMALE` / `OTHER`.\n\n**Behavior:** full replace of both fields (not a merge) — omitting a field that was previously set clears it to `null`. Creates the profile row on first write if it doesn't exist yet. Address is **not** part of this body anymore — see Get/Update Staff Address below for `line1`/`line2`/`stateId`/`cityId`/`pincode`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n\nAudits `STAFF_PROFILE_UPDATED`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dateOfBirth\": \"1995-06-15\",\n  \"gender\": \"FEMALE\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "profile"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"dateOfBirth\": \"1995-06-15\",\n  \"gender\": \"FEMALE\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"dateOfBirth\": \"1995-06-15\",\n    \"gender\": \"FEMALE\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Target is a super-admin account",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/profile",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "profile"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"dateOfBirth\": \"1995-06-15\",\n  \"gender\": \"FEMALE\"\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Super-admin accounts cannot be modified through this endpoint.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:34:30Z\",\n    \"traceId\": \"3a4b5c6d7e8f9001\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Staff Address",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/address",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "address"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view`.\n\nReturns `AdminUserAddressResponse`: `{line1, line2, stateId, cityId, pincode, latitude, longitude, formattedAddress}`. `stateId`/`cityId` reference the Masterdata > Geography lookup tables (see that collection) rather than a free-text state/city name. `latitude`/`longitude`/`formattedAddress` are groundwork for a future geocoding integration - always `null` today, not yet settable through this API.\n\n**Behavior:** if no address has ever been saved for this staff member, this returns an all-`null` `AdminUserAddressResponse`, **not** a 404 - mirrors Get Staff Profile's \"every field null until set\" behavior.\n\n**`line1`/`line2` are stored as plain text, not encrypted** - a deliberate, developer-confirmed change (2026-11-13), corrected here from this collection's previous description, which claimed AES-256-GCM encryption for these two fields. Address is treated as lower-sensitivity than the Aadhaar/PAN/bank-account data in KYC/Bank Detail below, which *do* stay encrypted - see `AdminUserAddress.java` / `Address.java`'s own Javadoc for the full reasoning.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/address",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "address"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"line1\": \"221B Test Street\",\n    \"line2\": null,\n    \"stateId\": \"4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2\",\n    \"cityId\": \"9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01\",\n    \"pincode\": \"302001\",\n    \"latitude\": null,\n    \"longitude\": null,\n    \"formattedAddress\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown staff id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/address",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "address"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Staff member not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:35:00Z\",\n    \"traceId\": \"4b5c6d7e8f900112\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Staff Address",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/address",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "address"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit`.\n\n**Validation** — all fields optional (progressive capture, same philosophy as Update Staff Profile).\n- `line1` / `line2` — max 255 chars each.\n- `stateId` / `cityId` — must reference an existing Masterdata > Geography row if provided (see that collection).\n- `pincode` — max 10 chars, no numeric/format check (deliberately permissive, same rationale as KYC fields below).\n\n**Behavior:** full replace (not a merge) — creates the address row on first write. **`line1`/`line2` are stored as plain text, not encrypted** — corrected here from this collection's previous description, which claimed encryption; see Get Staff Address above for the full reasoning.\n\n**Errors** (checked in this order)\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n| `stateId` provided but doesn't exist | `VALIDATION_ERROR` | 400 — \"Unknown state.\" |\n| `cityId` provided but doesn't exist | `VALIDATION_ERROR` | 400 — \"Unknown city.\" |\n\nAudits `ADMIN_STAFF_ADDRESS_UPDATED`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"line1\": \"221B Test Street\",\n  \"line2\": null,\n  \"stateId\": \"{{stateId}}\",\n  \"cityId\": \"{{cityId}}\",\n  \"pincode\": \"302001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/address",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "address"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"line1\": \"221B Test Street\",\n  \"line2\": null,\n  \"stateId\": \"{{stateId}}\",\n  \"cityId\": \"{{cityId}}\",\n  \"pincode\": \"302001\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"line1\": \"221B Test Street\",\n    \"line2\": null,\n    \"stateId\": \"4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2\",\n    \"cityId\": \"9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01\",\n    \"pincode\": \"302001\",\n    \"latitude\": null,\n    \"longitude\": null,\n    \"formattedAddress\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - Unknown state",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/address",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "address"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"line1\": \"221B Test Street\",\n  \"line2\": null,\n  \"stateId\": \"00000000-0000-4000-8000-000000000000\",\n  \"cityId\": null,\n  \"pincode\": \"302001\"\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Unknown state.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-01T10:25:00Z\",\n    \"traceId\": \"29303a4b5c6d7e8f\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Staff KYC",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "kyc"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view` (for masked values) — see below for unmasked.\n\nReturns `{aadhaarNumber, panNumber, uanNumber, pfNumber, esicNumber}` — all `null` until set. Values are **encrypted at rest** (AES-256-GCM, random IV per value, via `PiiEncryptor`/`EncryptedStringConverter` — transparent to this API, decrypted on read). This encryption is unchanged and unrelated to the plain-text change made to Staff Address above.\n\n**Masking:** `admin_staff.view` alone (checked at the controller for both GET and PUT) only ever returns **masked** values — all but the last 4 characters replaced with `*` (e.g. `\"********9012\"`), or fully masked if the value is 4 characters or shorter. Seeing the **unmasked** value additionally requires `admin_staff.view_kyc`, which by default only the **Senior Developer** and **Junior Developer** seed roles hold. Masking is applied purely in the response — the stored value is unaffected either way.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Masked (admin_staff.view only)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "kyc"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"aadhaarNumber\": \"********9012\",\n    \"panNumber\": \"******34F\",\n    \"uanNumber\": null,\n    \"pfNumber\": null,\n    \"esicNumber\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "200 - Unmasked (admin_staff.view_kyc)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "kyc"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"aadhaarNumber\": \"123456789012\",\n    \"panNumber\": \"ABCDE1234F\",\n    \"uanNumber\": null,\n    \"pfNumber\": null,\n    \"esicNumber\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown staff id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "kyc"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Staff member not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:36:00Z\",\n    \"traceId\": \"5c6d7e8f90011223\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Staff KYC",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "kyc"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit` (the write side has no separate \"can write KYC\" permission — `admin_staff.edit` alone is sufficient, deliberately, to avoid an unused extra knob; only *reading* unmasked is gated further).\n\n**Validation** — every field optional (progressive capture): `aadhaarNumber`/`panNumber`/`uanNumber` max 20 chars, `pfNumber` max 50, `esicNumber` max 30. **Deliberately no format/checksum validation** (e.g. Aadhaar's 12-digit pattern, PAN's checksum letter) — only a length cap, to avoid rejecting legitimate input against a guessed-at pattern that might not match real-world data exactly.\n\n**Behavior:** full replace of all 5 fields. Creates the KYC row on first write if it doesn't exist yet. The response is masked using the exact same rule as Get Staff KYC — note that even the admin who just *wrote* a value gets it back masked if they only hold `admin_staff.view`, not `admin_staff.edit`+`admin_staff.view_kyc` together.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n| Any field exceeds its max length | `VALIDATION_ERROR` | 400 |\n\nAudits `STAFF_KYC_UPDATED`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aadhaarNumber\": \"123456789012\",\n  \"panNumber\": \"ABCDE1234F\",\n  \"uanNumber\": null,\n  \"pfNumber\": null,\n  \"esicNumber\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK (masked in response)",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "kyc"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"aadhaarNumber\": \"123456789012\",\n  \"panNumber\": \"ABCDE1234F\",\n  \"uanNumber\": null,\n  \"pfNumber\": null,\n  \"esicNumber\": null\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"aadhaarNumber\": \"********9012\",\n    \"panNumber\": \"******34F\",\n    \"uanNumber\": null,\n    \"pfNumber\": null,\n    \"esicNumber\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Target is a super-admin account",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/kyc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "kyc"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"aadhaarNumber\": \"123456789012\",\n  \"panNumber\": \"ABCDE1234F\",\n  \"uanNumber\": null,\n  \"pfNumber\": null,\n  \"esicNumber\": null\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Super-admin accounts cannot be modified through this endpoint.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:36:30Z\",\n    \"traceId\": \"6d7e8f9001122334\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Staff Bank Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "bank-detail"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.view` (for a masked account number) — see below for unmasked.\n\nReturns `{accountHolderName, bankName, accountNumber, ifscCode, branchName}` — all `null` until set. `accountNumber` is **encrypted at rest** (same mechanism as KYC).\n\n**Masking:** `accountNumber` follows the exact same masking rule as KYC above, gated by `admin_staff.view_bank_details` instead of `admin_staff.view_kyc` (same two seed roles hold it by default, but they're two independent permission codes — holding one does not imply the other). `accountHolderName`, `bankName`, `ifscCode`, `branchName` are **never masked** — only the account number is treated as sensitive here.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Masked (admin_staff.view only)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "bank-detail"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"********2333\",\n    \"ifscCode\": \"TEST0001234\",\n    \"branchName\": \"MG Road\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "200 - Unmasked (admin_staff.view_bank_details)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "bank-detail"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"000111222333\",\n    \"ifscCode\": \"TEST0001234\",\n    \"branchName\": \"MG Road\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown staff id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "bank-detail"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Staff member not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:37:00Z\",\n    \"traceId\": \"7e8f900112233445\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Staff Bank Detail",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                "{{staffId}}",
+                "bank-detail"
+              ]
+            },
+            "description": "**Permission:** `admin_staff.edit` (same reasoning as Update Staff KYC — no separate write permission).\n\n**Validation** — every field optional (progressive capture): `accountHolderName`/`bankName`/`branchName` max 150 chars, `accountNumber` max 30, `ifscCode` max 15. No IFSC-format or account-number-checksum validation, same rationale as KYC.\n\n**Behavior:** full replace of all 5 fields. Creates the row on first write if it doesn't exist yet. The response's `accountNumber` is masked using the same rule as Get Staff Bank Detail.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n| Any field exceeds its max length | `VALIDATION_ERROR` | 400 |\n\nAudits `STAFF_BANK_DETAIL_UPDATED`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\",\n  \"branchName\": \"MG Road\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK (masked in response)",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "bank-detail"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\",\n  \"branchName\": \"MG Road\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"********2333\",\n    \"ifscCode\": \"TEST0001234\",\n    \"branchName\": \"MG Road\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Target is a super-admin account",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/staff/{{staffId}}/bank-detail",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "staff",
+                    "{{staffId}}",
+                    "bank-detail"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\",\n  \"branchName\": \"MG Road\"\n}"
+                }
+              },
+              "status": "Unprocessable Content",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Super-admin accounts cannot be modified through this endpoint.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:37:30Z\",\n    \"traceId\": \"8f90011223344556\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

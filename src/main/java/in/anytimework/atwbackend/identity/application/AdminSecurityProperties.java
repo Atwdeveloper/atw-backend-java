@@ -15,6 +15,10 @@ public record AdminSecurityProperties(
         int otpMaxAttempts,
         Duration otpResendInterval,
         int otpMaxResends,
+        // maxFailedLogins/lockoutDuration: no longer read anywhere (account-level lockout was
+        // removed from AuthService.login). Left bound so an environment that still sets
+        // ADMIN_MAX_FAILED_LOGINS/ADMIN_LOCKOUT_DURATION doesn't need to change anything; they're
+        // just inert now.
         int maxFailedLogins,
         Duration lockoutDuration,
         Duration passwordResetTtl,

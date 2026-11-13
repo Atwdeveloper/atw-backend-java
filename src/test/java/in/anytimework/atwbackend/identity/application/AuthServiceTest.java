@@ -66,7 +66,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_withWrongPassword_countsFailureAnd401() {
+    void login_withWrongPassword_is401AndAudited() {
         AdminUser admin = activeAdmin();
         when(adminUsers.findByUsernameIgnoreCaseOrEmailIgnoreCase("admin@example.com", "admin@example.com"))
                 .thenReturn(Optional.of(admin));
@@ -75,8 +75,7 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.login("admin@example.com", "bad", "ip", "ua"))
                 .isInstanceOf(UnauthorizedException.class);
 
-        assertThat(admin.getFailedLoginAttempts()).isEqualTo(1);
-        verify(adminUsers).save(admin);
+        verify(audit).record(eq(admin.getId()), eq("LOGIN_FAILED"), anyString(), any(), any());
         verify(otpService, never()).issue(any());
     }
 

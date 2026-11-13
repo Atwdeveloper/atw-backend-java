@@ -1,7 +1,7 @@
 package in.anytimework.atwbackend.identity.application;
 
 import in.anytimework.atwbackend.identity.api.role.dto.CreateAdminRoleRequest;
-import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleDto;
+import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleResponse;
 import in.anytimework.atwbackend.identity.api.role.dto.UpdateAdminRoleRequest;
 import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
 import in.anytimework.atwbackend.identity.domain.AdminPermission;
@@ -48,17 +48,17 @@ public class AdminRoleService {
     }
 
     @Transactional(readOnly = true)
-    public List<AdminRoleDto> list() {
+    public List<AdminRoleResponse> list() {
         return roles.findAll().stream().map(this::toDto).toList();
     }
 
     @Transactional(readOnly = true)
-    public AdminRoleDto get(UUID id) {
+    public AdminRoleResponse get(UUID id) {
         return toDto(findOrThrow(id));
     }
 
     @Transactional
-    public AdminRoleDto create(CreateAdminRoleRequest request, String ip, String userAgent) {
+    public AdminRoleResponse create(CreateAdminRoleRequest request, String ip, String userAgent) {
         if (roles.existsByName(request.name())) {
             throw new ConflictException("A role named '" + request.name() + "' already exists.");
         }
@@ -79,7 +79,7 @@ public class AdminRoleService {
     }
 
     @Transactional
-    public AdminRoleDto update(UUID id, UpdateAdminRoleRequest request, String ip, String userAgent) {
+    public AdminRoleResponse update(UUID id, UpdateAdminRoleRequest request, String ip, String userAgent) {
         AdminRole role = findOrThrow(id);
         if (role.isSystemRole()) {
             throw new BusinessRuleException("System roles cannot be modified.");
@@ -134,8 +134,8 @@ public class AdminRoleService {
         return roles.findById(id).orElseThrow(() -> new ResourceNotFoundException("Role not found"));
     }
 
-    private AdminRoleDto toDto(AdminRole role) {
+    private AdminRoleResponse toDto(AdminRole role) {
         List<String> codes = role.getPermissions().stream().map(AdminPermission::getCode).sorted().toList();
-        return new AdminRoleDto(role.getId(), role.getName(), role.getDescription(), role.isSystemRole(), codes);
+        return new AdminRoleResponse(role.getId(), role.getName(), role.getDescription(), role.isSystemRole(), codes);
     }
 }

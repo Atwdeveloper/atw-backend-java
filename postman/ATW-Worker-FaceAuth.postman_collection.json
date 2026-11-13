@@ -1,0 +1,554 @@
+{
+  "info": {
+    "name": "ATW Backend — Worker Face Enrollment",
+    "description": "# ATW Backend — Worker Face Enrollment\n\nAdmin-triggered enrollment of a worker's face template for a future attendance face-match feature - a\ndedicated `faceauth` module, not part of `kyc`. Whether a worker has a face template on file is an\nindependent fact, with its own `faceauth.*` permissions separate from `workers.*`/`kyc.*`. Nested under\n`/admin/workers/{workerId}/face-enrollment` for API discoverability even though it's served by a\ndifferent module's controller (same precedent as Worker KYC).\n\n**Run order:** every request here only needs an existing `{{workerId}}` - there is no create-order\ndependency between the three requests themselves, and this collection never creates a worker. Get one\nfrom the Worker collection (written concurrently alongside this one) and set it as an environment\nvariable first. A sensible manual run: **Get Face Enrollment** (see the not-enrolled placeholder) →\n**Enroll / Re-enroll Worker Face** → **Get Face Enrollment** again (now enrolled) → **Remove Face\nEnrollment** → **Get Face Enrollment** once more (back to the placeholder).\n\n**Shared conventions across every request in this folder:**\n- `GET` never 404s - a worker who hasn't enrolled gets a placeholder body (`enrolled: false`, every\n  other field `null`) back, not an error. There is no separate \"has this worker enrolled\" endpoint;\n  `data.enrolled` on the `GET` response is the only way to ask that through this API.\n- `PUT` is both enroll *and* re-enroll - re-enrolling fully **overwrites** the previous template, with\n  no history of past enrollments kept, only ever the current one.\n- `DELETE` is a \"make sure nothing is enrolled\" operation, not \"delete this specific enrollment\" - it is\n  **not** an error if the worker had nothing enrolled to begin with.\n- Locally and in tests, `atw.face-auth.provider` is unset and defaults to a stub adapter that accepts\n  any photo as good-quality and live. The 422 quality/liveness failure examples below can only actually\n  be exercised against a real `atw.face-auth.provider=python` deployment of the separate face-auth\n  service.\n- The Worker module's own `GET /workers/{id}` already embeds this exact enrollment shape as its\n  `faceEnrollment` field, and its list endpoint carries a lighter `faceEnrolledAt` timestamp - most\n  front-end screens won't need **Get Face Enrollment** below at all except around the enroll/re-enroll/\n  remove actions themselves.\n\nFor admin login/2FA, see **ATW-Auth-Account.postman_collection.json**; for staff/role administration,\nsee **ATW-RBAC-Staff.postman_collection.json**; for reference/lookup data, see\n**ATW-Masterdata.postman_collection.json** (also this collection's style template).\n\nEvery endpoint is versioned under `/api/v1/` and returns the same envelope:\n\n```\n{ \"success\": boolean, \"data\": <payload> | null, \"error\": <ApiError> | null }\n```\n\n`ApiError` shape: `{\"code\": string, \"message\": string, \"fieldErrors\": [{\"field\",\"message\"}] | null, \"timestamp\": ISO-8601 string, \"traceId\": string | null}`. `fieldErrors` is populated only for `VALIDATION_ERROR` responses that came from `@Valid` request-body validation; it's `null`/omitted for every other error, including other `VALIDATION_ERROR` responses raised programmatically (e.g. \"Unknown permission code(s)\"). `traceId` echoes the `X-Correlation-Id` request header when present — include it when reporting a bug.\n\n## Running this collection\n\nSelect the **ATW Backend - Local** environment first, and run **Login** / **Verify OTP** from the\nAuth & Account collection to populate `{{accessToken}}` — every request here requires it, plus the\nmatching `faceauth.*` permission. Then set `{{workerId}}` to a real worker id (create one via the\nWorker collection, or paste in an existing one) - nothing below creates a worker itself.\n\n1. **Get Face Enrollment** has no dependency on the other two - safe to run first against any\n   `{{workerId}}`.\n2. **Enroll / Re-enroll Worker Face** needs an actual image file attached to its `file` form-data part\n   (Postman can't supply one for you - pick any small PNG/JPEG/WEBP under 2MB) and `consentGiven` left\n   at `true`.\n3. **Remove Face Enrollment** depends on nothing - it succeeds whether or not step 2 ran.\n\n## Error codes that can appear on (almost) any endpoint\n\nThese are produced centrally — by `GlobalExceptionHandler`, by Spring Security's entry point / access-denied handler, or by the two security filters that run before a controller is even reached — so they are **not** re-documented on every individual request below; only an endpoint's *specific* codes and triggers are. Two pairs are easy to confuse and worth reading carefully:\n\n| Code | HTTP | Meaning |\n|---|---|---|\n| `VALIDATION_ERROR` | 400 | A `@Valid` request-body field failed Bean Validation (`fieldErrors[]` present), or a service-level input check failed (no `fieldErrors`). |\n| `MALFORMED_REQUEST` | 400 | Request body is missing or isn't valid JSON. |\n| `UNSUPPORTED_MEDIA_TYPE` | 415 | `Content-Type` isn't `application/json`. |\n| `UNAUTHENTICATED` | 401 | **No bearer token was presented at all**, or it's malformed/expired/signature-invalid. Produced by Spring Security itself, before any controller runs. |\n| `UNAUTHORIZED` | 401 | A **business-level** auth failure on an endpoint that doesn't require a token in the first place — bad login credentials, a locked/disabled account, an invalid refresh/reset/invite token. Same HTTP status as `UNAUTHENTICATED` above, different meaning: this means \"the token/credential you supplied is bad\", not \"you supplied nothing\". |\n| `SESSION_REVOKED` | 401 | The bearer token parses fine, but the admin's `security_version` has moved on since it was issued (password changed/reset, or their role assignment changed), or the account is no longer `ACTIVE`. The client must discard tokens and log in again — refreshing won't help, the refresh token was revoked too. |\n| `MUST_CHANGE_PASSWORD` | 403 | Authenticated, but the token's `mustChangePassword` flag is set and this isn't `/admin/account/me` or `/admin/account/change-password`. |\n| `ACCESS_DENIED` | 403 | Authenticated, but lacking the specific permission the endpoint requires. |\n| `RATE_LIMITED` | 429 | Too many requests to one of the 6 public, abuse-prone auth endpoints from the same IP within the window — default 10 requests/60s, **per endpoint**, not pooled across them. |\n| `NOT_FOUND` | 404 | The **URL itself** doesn't match any endpoint (a routing miss — typo'd path, wrong version prefix, etc). |\n| `RESOURCE_NOT_FOUND` | 404 | The URL is valid, but the specific id in it (a staff id, role id, ...) doesn't exist. Different from `NOT_FOUND` above — don't conflate \"no such route\" with \"no such record\". |\n| `METHOD_NOT_ALLOWED` | 405 | Right URL, wrong HTTP verb. |\n| `BUSINESS_RULE_VIOLATION` | 422 | Input is syntactically well-formed but violates a business rule (e.g. \"system roles cannot be modified\", a privilege-escalation attempt, self/super-admin protection). |\n| `CONFLICT` | 409 | Either an endpoint's own duplicate check (most common — a friendlier, specific message), or a generic last-resort safety net when a unique-constraint violation reaches the database despite an earlier application-level check passing (a genuine race between two concurrent requests) — that fallback case always carries the same generic message, regardless of which field collided. |\n| `INTERNAL_ERROR` | 500 | Unexpected failure. Full detail (stack trace) is logged server-side against the same `traceId` returned to the client; never returned in the response body itself. |\n\n**Specific to this module:** `RESOURCE_NOT_FOUND` above does **not** apply to any endpoint in this\ncollection. `GET` returns a not-enrolled placeholder instead of 404 for any `workerId` at all (real or\nnot - confirmed against `FaceAuthServiceImpl.getEnrollment`, which never checks the `worker` table).\nNeither `PUT` nor `DELETE` checks worker existence either; a `PUT` against a `workerId` that doesn't\nactually exist as a worker would instead fail with a generic `CONFLICT`/409 from the underlying\nforeign-key constraint - an edge case a normal UI flow should never hit, since `workerId` always comes\nfrom an already-loaded worker page.\n\n## Documentation cross-references\n\n- **ATW-Auth-Account.postman_collection.json** — login/2FA and a caller's own account self-service.\n- **ATW-RBAC-Staff.postman_collection.json** — role/permission management and staff administration.\n- **ATW-Masterdata.postman_collection.json** — departments/industries/designations/skills/minimum-wage\n  reference data, and this collection's style template.\n- `FRONTEND_HANDOVER.md` / `HANDOVER.md` — broader project handover context.\n- The **Worker** and **Worker KYC** admin APIs (collections written concurrently alongside this one)\n  own the `workerId` this whole module keys off of, and surface this module's data without a separate\n  call via `WorkerResponse.faceEnrollment` / `WorkerSummaryResponse.faceEnrolledAt`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "item": [
+    {
+      "name": "Worker - Face Enrollment",
+      "description": "Three endpoints covering the full lifecycle of one worker's face template: check status, enroll/re-enroll, and remove. All three are nested under `/admin/workers/{workerId}/face-enrollment` and gated by `faceauth.*` permissions (separate from `workers.*`/`kyc.*`). See this collection's top description for the full run order, shared conventions, and error-code table.",
+      "item": [
+        {
+          "name": "Get Face Enrollment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "{{workerId}}",
+                "face-enrollment"
+              ]
+            },
+            "description": "**Permission:** `faceauth.view`.\n\nNever returns 404, even for a `workerId` that doesn't exist or has simply never enrolled - a not-enrolled placeholder (`enrolled: false`, every other field `null`) comes back instead, so a caller never needs a separate existence check before rendering an enrollment panel. This read performs no check against the worker table itself either way (confirmed against `FaceAuthServiceImpl.getEnrollment`) - don't rely on it to validate that a `workerId` is real.\n\nThere is no separate \"is this worker enrolled\" endpoint - `data.enrolled` here is the only way to ask that through this API. `photoUrl` is a short-lived (about 15 minutes) signed Azure Blob URL; call this endpoint again for a fresh one rather than caching it past expiry."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Enrolled",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": true, \"data\": {\"workerId\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\", \"enrolled\": true, \"enrolledAt\": \"2026-11-10T09:15:00Z\", \"livenessConfidence\": 0.97, \"photoUrl\": \"https://atwstorage.blob.core.windows.net/documents/worker_face_enrollment_photo/3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b/7f3e2d1c-0b9a-4f8e-9d7c-6b5a4f3e2d1c.jpg?sv=2025-05-05&se=2026-11-10T09%3A30%3A00Z&sr=b&sp=r&sig=REDACTED\"}, \"error\": null}"
+            },
+            {
+              "name": "200 - Not enrolled (placeholder, not a 404)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": true, \"data\": {\"workerId\": \"99999999-9999-4999-8999-999999999999\", \"enrolled\": false, \"enrolledAt\": null, \"livenessConfidence\": null, \"photoUrl\": null}, \"error\": null}"
+            },
+            {
+              "name": "400 - workerId is not a valid UUID",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/not-a-uuid/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "not-a-uuid",
+                    "face-enrollment"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"VALIDATION_ERROR\", \"message\": \"Invalid value for parameter 'workerId'\", \"fieldErrors\": null, \"timestamp\": \"2026-11-13T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            }
+          ]
+        },
+        {
+          "name": "Enroll / Re-enroll Worker Face",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "{{workerId}}",
+                "face-enrollment"
+              ]
+            },
+            "description": "**Permission:** `faceauth.enroll`.\n\nMultipart form-data with two parts: `file` (the reference photo) and `consentGiven`. The caller's IP is recorded server-side as the consent IP (from `X-Forwarded-For`'s last trusted hop, else the socket address) - there is no request field for it.\n\nRe-enrolling a worker who already has a template fully **overwrites** it; there is no history of past enrollments, only ever the current one. The previous enrollment photo is deleted once the new one is stored.\n\n**Validation**, checked in this order (all -> 400 `VALIDATION_ERROR`, nothing persisted):\n1. `consentGiven` must be `true` - enrollment can never proceed without this worker's explicit, recorded consent.\n2. `file` must be non-empty and at most 2MB.\n3. Its declared `Content-Type` must be exactly `image/png`, `image/jpeg`, or `image/webp`.\n4. Its actual leading bytes must match that declared type (magic-byte check - the same guard used on the Masterdata icon uploads).\n\n**Business rules**, checked by the face-auth provider itself once validation passes (all -> 422 `BUSINESS_RULE_VIOLATION`, nothing persisted - ATW never stores a template the provider itself considers unreliable):\n1. Image quality must be acceptable - rejection reasons (e.g. too blurry, face too small, poor lighting) come verbatim from the provider.\n2. The liveness check must pass - rejects an obvious photo-of-a-photo/spoof attempt.\n\nLocally and in tests, `atw.face-auth.provider` is unset and defaults to a stub adapter that accepts any photo as acceptable-quality and live - the two 422 examples below can only actually be exercised against a real `atw.face-auth.provider=python` deployment of the separate face-auth service (see this collection's folder description).",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "consentGiven",
+                  "type": "text",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Enrolled (or re-enrolled, overwriting the previous template)",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    },
+                    {
+                      "key": "consentGiven",
+                      "type": "text",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": true, \"data\": {\"workerId\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\", \"enrolled\": true, \"enrolledAt\": \"2026-11-13T06:40:00Z\", \"livenessConfidence\": 0.97, \"photoUrl\": \"https://atwstorage.blob.core.windows.net/documents/worker_face_enrollment_photo/3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b/7f3e2d1c-0b9a-4f8e-9d7c-6b5a4f3e2d1c.jpg?sv=2025-05-05&se=2026-11-10T09%3A30%3A00Z&sr=b&sp=r&sig=REDACTED\"}, \"error\": null}"
+            },
+            {
+              "name": "400 - Consent not given",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    },
+                    {
+                      "key": "consentGiven",
+                      "type": "text",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"VALIDATION_ERROR\", \"message\": \"Worker consent is required before enrolling a face template.\", \"fieldErrors\": null, \"timestamp\": \"2026-11-13T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            },
+            {
+              "name": "400 - Unsupported file content type",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    },
+                    {
+                      "key": "consentGiven",
+                      "type": "text",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"VALIDATION_ERROR\", \"message\": \"Unsupported image content type: application/pdf (allowed: image/png, image/jpeg, image/webp)\", \"fieldErrors\": null, \"timestamp\": \"2026-11-13T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            },
+            {
+              "name": "422 - Image quality insufficient",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    },
+                    {
+                      "key": "consentGiven",
+                      "type": "text",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"BUSINESS_RULE_VIOLATION\", \"message\": \"Image quality is insufficient for enrollment: face too small, image too blurry\", \"fieldErrors\": null, \"timestamp\": \"2026-11-13T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            },
+            {
+              "name": "422 - Liveness check failed",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    },
+                    {
+                      "key": "consentGiven",
+                      "type": "text",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"BUSINESS_RULE_VIOLATION\", \"message\": \"Liveness check failed - please retake the photo of the worker in person.\", \"fieldErrors\": null, \"timestamp\": \"2026-11-13T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            }
+          ]
+        },
+        {
+          "name": "Remove Face Enrollment",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "{{workerId}}",
+                "face-enrollment"
+              ]
+            },
+            "description": "**Permission:** `faceauth.enroll` - the same permission as enroll/re-enroll; there is no separate `faceauth.delete`.\n\nDeletes the stored template and its reference photo. **Not an error if nothing was enrolled** - this is a \"make sure nothing is enrolled\" operation, not a \"delete this specific enrollment\" one (same convention as Masterdata's Remove Industry Image)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "{{workerId}}",
+                    "face-enrollment"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": true, \"data\": null, \"error\": null}"
+            },
+            {
+              "name": "400 - workerId is not a valid UUID",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/not-a-uuid/face-enrollment",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "not-a-uuid",
+                    "face-enrollment"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"VALIDATION_ERROR\", \"message\": \"Invalid value for parameter 'workerId'\", \"fieldErrors\": null, \"timestamp\": \"2026-11-13T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -24,11 +24,24 @@ import java.time.OffsetDateTime;
 @Component
 public class AzureBlobFileStorage implements FileStorage {
 
+    // How long a fetched user-delegation key is reused before asking Azure AD for a fresh one, and
+    // how early to refresh relative to that - comfortably covers every validFor this codebase
+    // actually requests (photo/image display URLs, all 15 minutes), so one key signs many SAS tokens
+    // instead of one network round-trip per generateDownloadUrl call. Without this, listing endpoints
+    // that resolve an image URL per row would make one Azure AD call PER ROW in any environment using
+    // managed identity (no account key) - the actual reason list views used to omit images entirely.
+    private static final Duration DELEGATION_KEY_LIFETIME = Duration.ofHours(1);
+    private static final Duration DELEGATION_KEY_REFRESH_MARGIN = Duration.ofMinutes(10);
+
     private final BlobServiceClient serviceClient;
     private final BlobContainerClient containerClient;
     private final boolean accountKeyAvailable;
 
     private volatile boolean containerReady = false;
+    private volatile CachedDelegationKey cachedDelegationKey;
+
+    private record CachedDelegationKey(UserDelegationKey key, OffsetDateTime expiry) {
+    }
 
     public AzureBlobFileStorage(BlobServiceClient serviceClient, StorageProperties properties) {
         this.serviceClient = serviceClient;
@@ -62,10 +75,36 @@ public class AzureBlobFileStorage implements FileStorage {
         if (accountKeyAvailable) {
             sas = blob.generateSas(values);
         } else {
-            UserDelegationKey delegationKey = serviceClient.getUserDelegationKey(OffsetDateTime.now(), expiry);
-            sas = blob.generateUserDelegationSas(values, delegationKey);
+            sas = blob.generateUserDelegationSas(values, currentDelegationKey());
         }
         return URI.create(blob.getBlobUrl() + "?" + sas);
+    }
+
+    /**
+     * Reuses a cached delegation key for up to {@link #DELEGATION_KEY_LIFETIME}, refreshing it
+     * {@link #DELEGATION_KEY_REFRESH_MARGIN} early - the same double-checked-locking shape as
+     * {@link #ensureContainer()}. Assumes every caller's {@code validFor} stays well under the cached
+     * key's own remaining lifetime (true today - 15 minutes for every photo/image URL this codebase
+     * generates); a caller requesting a materially longer-lived SAS would need this to size the
+     * delegation key's own expiry around that request instead of this fixed window.
+     */
+    private UserDelegationKey currentDelegationKey() {
+        CachedDelegationKey snapshot = cachedDelegationKey;
+        OffsetDateTime now = OffsetDateTime.now();
+        if (snapshot != null && now.isBefore(snapshot.expiry().minus(DELEGATION_KEY_REFRESH_MARGIN))) {
+            return snapshot.key();
+        }
+        synchronized (this) {
+            snapshot = cachedDelegationKey;
+            now = OffsetDateTime.now();
+            if (snapshot != null && now.isBefore(snapshot.expiry().minus(DELEGATION_KEY_REFRESH_MARGIN))) {
+                return snapshot.key();
+            }
+            OffsetDateTime newExpiry = now.plus(DELEGATION_KEY_LIFETIME);
+            UserDelegationKey key = serviceClient.getUserDelegationKey(now, newExpiry);
+            cachedDelegationKey = new CachedDelegationKey(key, newExpiry);
+            return key;
+        }
     }
 
     @Override

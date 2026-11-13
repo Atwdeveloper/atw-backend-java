@@ -1,0 +1,59 @@
+{
+  "info": {
+    "name": "ATW Backend — Health",
+    "description": "# ATW Backend — Health\n\nA single, unauthenticated liveness check. **Note:** unlike every other endpoint in this API, this one\ndoes **not** use the `{success, data, error}` envelope — it's Spring Boot Actuator's own response\nshape, `{\"status\": \"UP\"}` (or `DOWN` with component detail, shown only to authenticated callers hitting\nit with a valid token). See `HANDOVER.md` §5 for the dedicated Azure liveness/readiness probe paths\n(`/actuator/health/liveness`, `/actuator/health/readiness`) that container orchestration uses instead\nof this one.\n\n## Documentation cross-references\n\n- **ATW-Auth-Account.postman_collection.json**, **ATW-RBAC-Staff.postman_collection.json**,\n  **ATW-Masterdata.postman_collection.json** — the actual business API, all of which DO use the\n  `{success, data, error}` envelope.\n- `HANDOVER.md` §5 — Azure health-probe configuration.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Public, unauthenticated (top-level status only — see the request's own description for when component detail appears).",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "**Permission:** none — path is public (`/actuator/health/**` is in `SecurityConfig.PUBLIC_PATHS`).\n\nReturns `{\"status\": \"UP\"}` when healthy, with no request body validation or application-specific error codes (this is a Spring Boot Actuator endpoint, not part of the `ApiResponse` envelope used everywhere else in this collection).\n\n**Component detail** (`components: {db: {...}, redis: {...}, ...}`, `mail` excluded via `management.health.mail.enabled=false`) only appears when the request carries a **valid, authenticated** bearer token — `management.endpoint.health.show-details=when-authorized` with no specific role configured, so any authenticated principal (not just one holding a particular permission) sees it; a fully anonymous request only ever sees the bare top-level `status`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

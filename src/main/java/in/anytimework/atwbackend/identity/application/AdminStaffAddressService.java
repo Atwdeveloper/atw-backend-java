@@ -1,6 +1,6 @@
 package in.anytimework.atwbackend.identity.application;
 
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAddressRequest;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserAddress;
@@ -36,14 +36,14 @@ public class AdminStaffAddressService {
     }
 
     @Transactional(readOnly = true)
-    public AdminUserAddressDto get(UUID staffId) {
+    public AdminUserAddressResponse get(UUID staffId) {
         requireStaffExists(staffId);
         return addresses.findByAdminUserId(staffId).map(this::toDto)
-                .orElse(new AdminUserAddressDto(null, null, null, null, null, null, null, null));
+                .orElse(new AdminUserAddressResponse(null, null, null, null, null, null, null, null));
     }
 
     @Transactional
-    public AdminUserAddressDto update(UUID staffId, UpdateAddressRequest request, String ip, String userAgent) {
+    public AdminUserAddressResponse update(UUID staffId, UpdateAddressRequest request, String ip, String userAgent) {
         AdminUser admin = requireStaffExists(staffId);
         if (admin.isSuperAdmin()) {
             throw new BusinessRuleException("Super-admin accounts cannot be modified through this endpoint.");
@@ -66,9 +66,9 @@ public class AdminStaffAddressService {
         return adminUsers.findById(staffId).orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
     }
 
-    private AdminUserAddressDto toDto(AdminUserAddress entity) {
+    private AdminUserAddressResponse toDto(AdminUserAddress entity) {
         var address = entity.getAddress();
-        return new AdminUserAddressDto(address.getLine1(), address.getLine2(), address.getStateId(),
+        return new AdminUserAddressResponse(address.getLine1(), address.getLine2(), address.getStateId(),
                 address.getCityId(), address.getPincode(), address.getLatitude(), address.getLongitude(),
                 address.getFormattedAddress());
     }

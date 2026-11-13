@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.identity.infrastructure;
 import in.anytimework.atwbackend.identity.application.AdminBootstrapProperties;
 import in.anytimework.atwbackend.identity.application.AdminSecurityProperties;
 import in.anytimework.atwbackend.shared.security.PiiEncryptionProperties;
+import in.anytimework.atwbackend.shared.security.WorkerPiiEncryptionProperties;
 import in.anytimework.atwbackend.shared.security.jwt.JwtProperties;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -41,6 +42,7 @@ public class StartupSecurityValidator implements ApplicationRunner {
             "dev-only-insecure-change-me-atw-backend-hs256-secret-key-0123456789";
     private static final String KNOWN_LOCAL_BOOTSTRAP_PASSWORD = "ChangeMe@12345";
     private static final String KNOWN_LOCAL_PII_ENCRYPTION_KEY = "aMgtn19OYBxgsWujXQpe/YjMiaigx0E7r0DXa3kKrRQ=";
+    private static final String KNOWN_LOCAL_WORKER_PII_ENCRYPTION_KEY = "c8ZWWQX6uaMDrKhuKJU8cwyz80sraP4EdBWcKfHZ4WM=";
     private static final int MIN_SECRET_BYTES = 32; // HS256 requires a key >= 256 bits.
     private static final int PII_KEY_BYTES = 32; // AES-256 requires exactly 256 bits.
 
@@ -48,16 +50,19 @@ public class StartupSecurityValidator implements ApplicationRunner {
     private final JwtProperties jwtProperties;
     private final AdminBootstrapProperties bootstrapProperties;
     private final PiiEncryptionProperties piiEncryptionProperties;
+    private final WorkerPiiEncryptionProperties workerPiiEncryptionProperties;
     private final AdminSecurityProperties adminSecurityProperties;
 
     public StartupSecurityValidator(Environment environment, JwtProperties jwtProperties,
                                     AdminBootstrapProperties bootstrapProperties,
                                     PiiEncryptionProperties piiEncryptionProperties,
+                                    WorkerPiiEncryptionProperties workerPiiEncryptionProperties,
                                     AdminSecurityProperties adminSecurityProperties) {
         this.environment = environment;
         this.jwtProperties = jwtProperties;
         this.bootstrapProperties = bootstrapProperties;
         this.piiEncryptionProperties = piiEncryptionProperties;
+        this.workerPiiEncryptionProperties = workerPiiEncryptionProperties;
         this.adminSecurityProperties = adminSecurityProperties;
     }
 
@@ -113,7 +118,10 @@ public class StartupSecurityValidator implements ApplicationRunner {
             }
         }
 
-        validatePiiEncryptionKey();
+        validatePiiEncryptionKey(piiEncryptionProperties.key(), "atw.security.pii-encryption.key",
+                "PII_ENCRYPTION_KEY", KNOWN_LOCAL_PII_ENCRYPTION_KEY, "staff KYC/bank data");
+        validatePiiEncryptionKey(workerPiiEncryptionProperties.key(), "atw.security.worker-pii-encryption.key",
+                "WORKER_PII_ENCRYPTION_KEY", KNOWN_LOCAL_WORKER_PII_ENCRYPTION_KEY, "worker KYC/bank data");
 
         if (adminSecurityProperties.otpInResponse()) {
             throw new IllegalStateException(
@@ -159,29 +167,32 @@ public class StartupSecurityValidator implements ApplicationRunner {
                 + "delivery (email) is available on this environment.", fixedOtp);
     }
 
-    private void validatePiiEncryptionKey() {
-        String key = piiEncryptionProperties.key();
+    /**
+     * Shared by both PII encryption keys (platform-staff and worker - see {@code PiiEncryptionConfig}):
+     * same four checks (present, not the known local literal, valid base64, exactly 32 bytes), just
+     * parameterized by which property/env-var/dataset is being validated.
+     */
+    private void validatePiiEncryptionKey(String key, String propertyName, String envVarName,
+                                          String knownLocalValue, String dataDescription) {
         if (!StringUtils.hasText(key)) {
             throw new IllegalStateException(
-                    "atw.security.pii-encryption.key (PII_ENCRYPTION_KEY) is not set. Refusing to start "
-                    + "outside the local/test profiles: staff KYC/bank data must never fall back to being "
+                    propertyName + " (" + envVarName + ") is not set. Refusing to start outside the "
+                    + "local/test profiles: " + dataDescription + " must never fall back to being "
                     + "stored unencrypted.");
         }
-        if (key.equals(KNOWN_LOCAL_PII_ENCRYPTION_KEY)) {
+        if (key.equals(knownLocalValue)) {
             throw new IllegalStateException(
-                    "atw.security.pii-encryption.key (PII_ENCRYPTION_KEY) is set to the "
-                    + "publicly-committed local-dev value. Set a strong, unique key for this environment.");
+                    propertyName + " (" + envVarName + ") is set to the publicly-committed local-dev "
+                    + "value. Set a strong, unique key for this environment.");
         }
         byte[] keyBytes;
         try {
             keyBytes = Base64.getDecoder().decode(key);
         } catch (IllegalArgumentException e) {
-            throw new IllegalStateException(
-                    "atw.security.pii-encryption.key (PII_ENCRYPTION_KEY) is not valid base64.", e);
+            throw new IllegalStateException(propertyName + " (" + envVarName + ") is not valid base64.", e);
         }
         if (keyBytes.length != PII_KEY_BYTES) {
-            throw new IllegalStateException(
-                    "atw.security.pii-encryption.key (PII_ENCRYPTION_KEY) must decode to exactly "
+            throw new IllegalStateException(propertyName + " (" + envVarName + ") must decode to exactly "
                     + PII_KEY_BYTES + " bytes (AES-256); got " + keyBytes.length + ".");
         }
     }
