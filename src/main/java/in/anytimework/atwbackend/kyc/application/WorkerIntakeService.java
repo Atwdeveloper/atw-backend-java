@@ -19,6 +19,7 @@ import in.anytimework.atwbackend.notification.application.NotificationService;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.security.IdentityNumberHasher;
 import in.anytimework.atwbackend.shared.security.RateLimiter;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -204,14 +205,15 @@ public class WorkerIntakeService {
         UUID stateId = resolveStateId(details.stateName());
         UUID cityId = resolveCityId(stateId, details.districtName());
 
-        verification.markVerified(clock.instant(), details.fullName(), details.gender(), details.dateOfBirth(),
-                details.addressLine1(), details.addressLine2(), details.pincode(),
+        verification.markVerified(clock.instant(), details.fullName(), details.fatherName(), details.gender(),
+                details.dateOfBirth(), details.addressLine1(), details.addressLine2(), details.pincode(),
                 details.stateName(), details.districtName(), photoDocumentId);
         verifications.save(verification);
 
-        return new AadhaarVerificationResultDto(verification.getId(), details.fullName(), details.gender(),
-                details.dateOfBirth(), details.addressLine1(), details.addressLine2(), details.pincode(),
-                details.stateName(), stateId, details.districtName(), cityId, photoDocumentId != null);
+        return new AadhaarVerificationResultDto(verification.getId(), details.fullName(), details.fatherName(),
+                details.gender(), details.dateOfBirth(), details.addressLine1(), details.addressLine2(),
+                details.pincode(), details.stateName(), stateId, details.districtName(), cityId,
+                photoDocumentId != null);
     }
 
     private void requireAdult(LocalDate dateOfBirth, WorkerAadhaarVerification verification) {

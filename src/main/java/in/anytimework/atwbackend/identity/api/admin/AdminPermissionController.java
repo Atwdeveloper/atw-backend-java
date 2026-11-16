@@ -27,8 +27,10 @@ import java.util.Map;
 @Tag(name = "Admin Permissions",
         description = "Read-only permission catalog that backs the role editor's permission matrix (checkbox "
                 + "grid). Not a CRUD resource - permissions are seeded by Flyway migrations, never created or "
-                + "edited through this API. There are currently ~23 modules in the full catalog; `admin_roles` "
-                + "(4 codes) and `admin_staff` (7 codes) are the two relevant to this collection.")
+                + "edited through this API. 54 codes across 11 modules as of 2026-11-16 (cut down from ~115 "
+                + "- see V31__permission_catalog_cleanup.sql - by removing codes for legacy modules never "
+                + "built in this backend); `admin_roles` (4 codes) and `admin_staff` (7 codes) are the two "
+                + "relevant to this collection.")
 public class AdminPermissionController {
 
     private final PermissionCatalogService catalogService;
@@ -58,7 +60,7 @@ public class AdminPermissionController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Full catalog, grouped by module (excerpt below shows 2 of the ~23 modules).",
+                    description = "Full catalog, grouped by module (excerpt below shows 2 of the 11 modules).",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             {
                               "success": true,

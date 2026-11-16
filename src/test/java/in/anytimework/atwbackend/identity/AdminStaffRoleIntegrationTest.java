@@ -188,7 +188,7 @@ class AdminStaffRoleIntegrationTest {
     @Test
     void fullLifecycle_createRoleThenStaff_acceptInvite_loginResolvesAssignedPermissions() {
         AdminRoleResponse role = createRoleAsSuperAdmin("QA Tester " + unique(), "d",
-                List.of("dashboard.view", "workers.view"));
+                List.of("department.view", "workers.view"));
 
         AdminStaffResponse staff = createStaffAsSuperAdmin("New Staff", List.of(role.id()));
         assertThat(staff.status()).isEqualTo(AdminStatus.ACTIVE);
@@ -202,7 +202,7 @@ class AdminStaffRoleIntegrationTest {
         String otp = extractOtp(emailSender.last().htmlBody());
         AuthTokens tokens = authService.verifyOtp(login.challengeId(), otp, "127.0.0.1", "JUnit");
 
-        assertThat(tokens.admin().authorities()).containsExactlyInAnyOrder("dashboard.view", "workers.view");
+        assertThat(tokens.admin().authorities()).containsExactlyInAnyOrder("department.view", "workers.view");
         assertThat(tokens.admin().mustChangePassword()).isFalse();
     }
 
@@ -322,9 +322,9 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staffWithLimitedPermissions_cannotGrantAMorePrivilegedRoleOnCreate() {
-        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("dashboard.view"));
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("department.view"));
         AdminRoleResponse powerfulRole = createRoleAsSuperAdmin("Powerful " + unique(), null,
-                List.of("dashboard.view", "admin_staff.delete"));
+                List.of("department.view", "admin_staff.delete"));
         AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited Actor", List.of(limitedRole.id()));
 
         actingAs(limitedActor.id(), () -> assertThatThrownBy(() -> staffService.create(new CreateAdminStaffRequest(null,
@@ -335,9 +335,9 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void staffWithLimitedPermissions_cannotGrantAMorePrivilegedRoleOnUpdate() {
-        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("dashboard.view"));
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited " + unique(), null, List.of("department.view"));
         AdminRoleResponse powerfulRole = createRoleAsSuperAdmin("Powerful " + unique(), null,
-                List.of("dashboard.view", "admin_staff.delete"));
+                List.of("department.view", "admin_staff.delete"));
         AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited Actor", List.of(limitedRole.id()));
         AdminStaffResponse victim = createStaffAsSuperAdmin("Victim", List.of());
 
@@ -478,11 +478,11 @@ class AdminStaffRoleIntegrationTest {
 
     @Test
     void roleCreate_cannotGrantAPermissionBeyondTheActorsOwn() {
-        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited RC " + unique(), null, List.of("dashboard.view"));
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited RC " + unique(), null, List.of("department.view"));
         AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited RC Actor", List.of(limitedRole.id()));
 
         actingAs(limitedActor.id(), () -> assertThatThrownBy(() -> roleService.create(
-                new CreateAdminRoleRequest("Sneaky " + unique(), null, List.of("dashboard.view", "admin_staff.delete")),
+                new CreateAdminRoleRequest("Sneaky " + unique(), null, List.of("department.view", "admin_staff.delete")),
                 "127.0.0.1", "JUnit"))
                 .isInstanceOf(BusinessRuleException.class));
     }
@@ -492,12 +492,12 @@ class AdminStaffRoleIntegrationTest {
         // The attack this guards against: editing an ALREADY-ASSIGNED role's permissions after the
         // fact, rather than assigning a new, more-powerful role - AdminStaffService's own guard only
         // ever sees an assignment event, not a later mutation of a role someone already holds.
-        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited RU " + unique(), null, List.of("dashboard.view"));
-        AdminRoleResponse targetRole = createRoleAsSuperAdmin("Target RU " + unique(), null, List.of("dashboard.view"));
+        AdminRoleResponse limitedRole = createRoleAsSuperAdmin("Limited RU " + unique(), null, List.of("department.view"));
+        AdminRoleResponse targetRole = createRoleAsSuperAdmin("Target RU " + unique(), null, List.of("department.view"));
         AdminStaffResponse limitedActor = createStaffAsSuperAdmin("Limited RU Actor", List.of(limitedRole.id()));
 
         actingAs(limitedActor.id(), () -> assertThatThrownBy(() -> roleService.update(targetRole.id(),
-                new UpdateAdminRoleRequest("Target RU", null, List.of("dashboard.view", "admin_staff.delete")),
+                new UpdateAdminRoleRequest("Target RU", null, List.of("department.view", "admin_staff.delete")),
                 "127.0.0.1", "JUnit"))
                 .isInstanceOf(BusinessRuleException.class));
     }

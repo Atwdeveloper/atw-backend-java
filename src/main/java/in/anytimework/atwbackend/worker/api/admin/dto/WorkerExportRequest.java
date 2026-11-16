@@ -4,6 +4,7 @@ import in.anytimework.atwbackend.kyc.application.KycStatus;
 import in.anytimework.atwbackend.worker.domain.WorkerStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
+import java.time.LocalDate;
 import java.util.Set;
 import java.util.UUID;
 
@@ -29,6 +30,10 @@ public record WorkerExportRequest(
         @Schema(description = "KYC statuses, resolved from the separate kyc module.", nullable = true)
         Set<KycStatus> kycStatus,
         @Schema(description = "Free-text match against first/last name, mobile number, worker code, "
-                + "and email.", nullable = true, example = "sharma") String search
+                + "and email.", nullable = true, example = "sharma") String search,
+        @Schema(description = "Registered (created) on or after this date (UTC).", nullable = true,
+                example = "2026-01-01") LocalDate registeredFrom,
+        @Schema(description = "Registered (created) on or before this date (UTC).", nullable = true,
+                example = "2026-12-31") LocalDate registeredTo
 ) {
 }

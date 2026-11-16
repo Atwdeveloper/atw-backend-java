@@ -12,19 +12,25 @@ import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
 import in.anytimework.atwbackend.shared.api.PageResponse;
+import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
+import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerNoteRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.SubmitWorkerEsicRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.SubmitWorkerUanRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerAddressRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerBankDetailRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerAddressResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerBankDetailResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerNoteResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerResponse;
+import in.anytimework.atwbackend.worker.api.admin.dto.WorkerStatutoryDetailResponse;
 import in.anytimework.atwbackend.worker.application.WorkerAddressService;
 import in.anytimework.atwbackend.worker.application.WorkerBankDetailService;
 import in.anytimework.atwbackend.worker.application.WorkerNoteService;
 import in.anytimework.atwbackend.worker.application.WorkerService;
+import in.anytimework.atwbackend.worker.application.WorkerStatutoryDetailService;
 import in.anytimework.atwbackend.worker.domain.AddressType;
 import in.anytimework.atwbackend.worker.domain.Gender;
 import org.junit.jupiter.api.Test;
@@ -54,6 +60,8 @@ class WorkerSatelliteServicesIntegrationTest {
     @Autowired
     private WorkerBankDetailService bankDetailService;
     @Autowired
+    private WorkerStatutoryDetailService statutoryDetailService;
+    @Autowired
     private WorkerNoteService noteService;
     @Autowired
     private DepartmentService departmentService;
@@ -80,7 +88,7 @@ class WorkerSatelliteServicesIntegrationTest {
         DesignationResponse designation = designationService.create(
                 new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
         WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(),
-                Gender.MALE, null, uniqueMobile(), null, department.id(), null,
+                null, Gender.MALE, null, uniqueMobile(), null, department.id(), null, null,
                 Set.of(designation.id()), designation.id(), Set.of()));
         return worker.id();
     }
@@ -142,7 +150,7 @@ class WorkerSatelliteServicesIntegrationTest {
         WorkerBankDetailResponse updated = bankDetailService.update(workerId,
                 new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
 
-        // Without kyc.view_sensitive (no authenticated caller in this test), the account number must be masked.
+        // Without workers.view_bank_details (no authenticated caller in this test), the account number must be masked.
         assertThat(updated.accountNumber()).isNotEqualTo("31234567890");
         assertThat(updated.accountNumber()).endsWith("7890");
         assertThat(updated.bankName()).isEqualTo("SBI");
@@ -158,5 +166,83 @@ class WorkerSatelliteServicesIntegrationTest {
 
         assertThat(notes.content()).hasSize(2);
         assertThat(notes.content().get(0).note()).isEqualTo("Second call - confirmed availability");
+    }
+
+    @Test
+    void bankDetail_verify_withTheDefaultStubProvider_marksVerified() {
+        UUID workerId = createWorker();
+        bankDetailService.update(workerId,
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
+
+        WorkerBankDetailResponse verified = bankDetailService.verify(workerId);
+
+        assertThat(verified.verified()).isTrue();
+        assertThat(verified.verifiedAt()).isNotNull();
+    }
+
+    @Test
+    void bankDetail_verify_withNoBankDetailSavedYet_isRejected() {
+        UUID workerId = createWorker();
+
+        assertThatThrownBy(() -> bankDetailService.verify(workerId)).isInstanceOf(BusinessRuleException.class);
+    }
+
+    @Test
+    void bankDetail_update_afterVerifying_resetsVerifiedFlag() {
+        UUID workerId = createWorker();
+        bankDetailService.update(workerId,
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
+        bankDetailService.verify(workerId);
+
+        WorkerBankDetailResponse reUpdated = bankDetailService.update(workerId,
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0009999", "Main Branch"));
+
+        assertThat(reUpdated.verified()).isFalse();
+    }
+
+    @Test
+    void statutoryDetail_getBeforeAnySubmission_returnsEmptyPlaceholder() {
+        UUID workerId = createWorker();
+
+        WorkerStatutoryDetailResponse detail = statutoryDetailService.get(workerId);
+
+        assertThat(detail.uanNumber()).isNull();
+        assertThat(detail.esicNumber()).isNull();
+    }
+
+    @Test
+    void statutoryDetail_submitUanThenEsic_bothRoundTripMaskedByDefault() {
+        UUID workerId = createWorker();
+        String uan = "UAN" + unique() + "9012";
+        String esic = "ESIC" + unique() + "3456";
+
+        statutoryDetailService.updateUan(workerId, uan);
+        WorkerStatutoryDetailResponse withEsic = statutoryDetailService.updateEsic(workerId, esic);
+
+        // Without kyc.view_sensitive (no authenticated caller in this test), both numbers are masked.
+        assertThat(withEsic.uanNumber()).endsWith("9012").isNotEqualTo(uan);
+        assertThat(withEsic.esicNumber()).endsWith("3456").isNotEqualTo(esic);
+    }
+
+    @Test
+    void statutoryDetail_submittingADuplicateUan_isRejected() {
+        UUID firstWorkerId = createWorker();
+        UUID secondWorkerId = createWorker();
+        String uan = "UAN" + unique();
+        statutoryDetailService.updateUan(firstWorkerId, uan);
+
+        assertThatThrownBy(() -> statutoryDetailService.updateUan(secondWorkerId, uan))
+                .isInstanceOf(ConflictException.class);
+    }
+
+    @Test
+    void statutoryDetail_submittingADuplicateEsic_isRejected() {
+        UUID firstWorkerId = createWorker();
+        UUID secondWorkerId = createWorker();
+        String esic = "ESIC" + unique();
+        statutoryDetailService.updateEsic(firstWorkerId, esic);
+
+        assertThatThrownBy(() -> statutoryDetailService.updateEsic(secondWorkerId, esic))
+                .isInstanceOf(ConflictException.class);
     }
 }

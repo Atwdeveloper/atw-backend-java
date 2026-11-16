@@ -26,14 +26,18 @@ public record WorkerResponse(
         String firstName,
         String middleName,
         String lastName,
+        @Schema(description = "Raw as declared/captured - see CreateWorkerRequest for why this may "
+                + "include a prefix like \"S/O: ...\".", nullable = true) String fatherName,
         @Schema(description = "Self-reported gender.") Gender gender,
         LocalDate dateOfBirth,
         String mobileNumber,
         String personalEmail,
-        @Schema(description = "Id of the worker's department (Masterdata module).",
-                example = "1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d") UUID departmentId,
+        @Schema(description = "Id of the worker's department (Masterdata module), or null if not set.",
+                example = "1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d", nullable = true) UUID departmentId,
         @Schema(description = "Id of the worker's industry (Masterdata module), or null if not set.",
                 example = "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", nullable = true) UUID industryId,
+        @Schema(description = "Optional, self-reported years of prior work experience, or null if not given.",
+                example = "2", nullable = true) Integer workExperienceYears,
         @Schema(description = "Lifecycle status - see the status-change endpoints below for the full "
                 + "transition rules.") WorkerStatus status,
         @Schema(description = "Free-text reason captured with the current status; only ever populated "

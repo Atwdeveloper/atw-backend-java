@@ -74,8 +74,8 @@ class SkillAdminIntegrationTest {
     /** A worker holding {@code skillId} (under {@code designationId}) - exists purely to exercise the delete-guard tests below. */
     private void createWorkerWithSkill(UUID designationId, UUID skillId) {
         DepartmentResponse department = departmentService.create(new CreateDepartmentRequest("Dept " + unique()));
-        workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE, null,
-                uniqueMobile(), null, department.id(), null, Set.of(designationId), designationId, Set.of(skillId)));
+        workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE, null,
+                uniqueMobile(), null, department.id(), null, null, Set.of(designationId), designationId, Set.of(skillId)));
     }
 
     @Test

@@ -1,6 +1,8 @@
 package in.anytimework.atwbackend.faceauth.application;
 
 import in.anytimework.atwbackend.faceauth.application.dto.FaceEnrollmentDto;
+import in.anytimework.atwbackend.faceauth.application.dto.FaceIdentificationResult;
+import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -45,4 +47,19 @@ public interface FaceAuthService {
 
     /** No-op if the worker has no enrollment. Also removes the stored enrollment photo. */
     void removeEnrollment(UUID workerId);
+
+    /**
+     * 1:N face identification - "whose face is this", as opposed to 1:1 "is this worker X" (not yet
+     * built - nothing calls for it today). Compares the probe photo's embedding against every
+     * currently-enrolled worker (brute-force cosine similarity in application code, same approach
+     * legacy itself used - fine at today's scale; see repo memory for why pgvector/indexed search was
+     * deferred rather than built up front).
+     *
+     * @throws BusinessRuleException if the probe photo itself fails quality/liveness (same checks as
+     *         {@link #enroll}), or if nobody is enrolled yet at all - a genuinely different, actionable
+     *         situation from "compared and found nothing". A confident-but-not-found result (nothing
+     *         clears the threshold, or the top two candidates are too close to call) is NOT an
+     *         exception - see {@link FaceIdentificationResult#matched()}.
+     */
+    FaceIdentificationResult identify(byte[] imageBytes, String contentType);
 }

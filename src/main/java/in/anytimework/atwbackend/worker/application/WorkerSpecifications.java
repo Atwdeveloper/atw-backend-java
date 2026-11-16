@@ -7,6 +7,9 @@ import in.anytimework.atwbackend.worker.domain.WorkerStatus;
 import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.Set;
 import java.util.UUID;
 
@@ -62,6 +65,27 @@ final class WorkerSpecifications {
     /** Already-resolved worker ids (e.g. from a cross-module KYC-status lookup) - never queried via a JPA join across module boundaries. */
     static Specification<Worker> idIn(Set<UUID> ids) {
         return (root, query, cb) -> root.get("id").in(ids);
+    }
+
+    /**
+     * Filters on {@code createdAt} (see {@link WorkerSearchCriteria}'s Javadoc for why this - not a
+     * separate column - is "registration date"). Interprets both bounds as whole calendar days in
+     * UTC: {@code from} is midnight UTC that day (inclusive), {@code to} is midnight UTC the
+     * following day (exclusive) - either bound may be null on its own, but this is only ever called
+     * when at least one is non-null.
+     */
+    static Specification<Worker> registeredBetween(LocalDate from, LocalDate to) {
+        Instant fromInstant = from != null ? from.atStartOfDay(ZoneOffset.UTC).toInstant() : null;
+        Instant toInstant = to != null ? to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant() : null;
+        return (root, query, cb) -> {
+            if (fromInstant != null && toInstant != null) {
+                return cb.and(cb.greaterThanOrEqualTo(root.get("createdAt"), fromInstant),
+                        cb.lessThan(root.get("createdAt"), toInstant));
+            }
+            return fromInstant != null
+                    ? cb.greaterThanOrEqualTo(root.get("createdAt"), fromInstant)
+                    : cb.lessThan(root.get("createdAt"), toInstant);
+        };
     }
 
     static Specification<Worker> matchesSearch(String term) {

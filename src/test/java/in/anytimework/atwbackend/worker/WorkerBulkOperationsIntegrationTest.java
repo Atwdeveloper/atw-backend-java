@@ -34,6 +34,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -97,12 +98,12 @@ class WorkerBulkOperationsIntegrationTest {
     }
 
     private WorkerResponse createWorker(DepartmentResponse department, UUID designationId) {
-        return workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE, null,
-                uniqueMobile(), null, department.id(), null, Set.of(designationId), designationId, Set.of()));
+        return workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE, null,
+                uniqueMobile(), null, department.id(), null, null, Set.of(designationId), designationId, Set.of()));
     }
 
     private static WorkerSearchCriteria emptyCriteria() {
-        return new WorkerSearchCriteria(null, null, null, null, null, null, null);
+        return new WorkerSearchCriteria(null, null, null, null, null, null, null, null, null);
     }
 
     // ---- Multiselect filters ------------------------------------------------------------------
@@ -119,7 +120,7 @@ class WorkerBulkOperationsIntegrationTest {
         WorkerResponse workerC = createWorker(department, designationC.id());
 
         PageResponse<WorkerSummaryResponse> result = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designationA.id(), designationB.id()), null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designationA.id(), designationB.id()), null, null, null, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(WorkerSummaryResponse::id)
@@ -140,7 +141,7 @@ class WorkerBulkOperationsIntegrationTest {
         // can never leak into the result set (gotcha: never trust an otherwise-unfiltered list()).
         PageResponse<WorkerSummaryResponse> result = workerService.list(
                 new WorkerSearchCriteria(Set.of(WorkerStatus.REGISTERED, WorkerStatus.INACTIVE), null, null,
-                        Set.of(designation.id()), null, null, null),
+                        Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(WorkerSummaryResponse::id)
@@ -154,14 +155,43 @@ class WorkerBulkOperationsIntegrationTest {
         DepartmentResponse department = createDepartment();
         DesignationResponse designation = createDesignation("SearchEmail");
         String email = "search" + unique() + "@example.com";
-        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE,
-                null, uniqueMobile(), email, department.id(), null, Set.of(designation.id()), designation.id(), Set.of()));
+        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), email, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         PageResponse<WorkerSummaryResponse> result = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, email),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, email, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(WorkerSummaryResponse::id).containsExactly(worker.id());
+    }
+
+    // ---- registeredFrom/registeredTo (there is no separate "registration date" column - this
+    // filters on createdAt, see WorkerSearchCriteria's Javadoc) -------------------------------------
+
+    @Test
+    void list_filtersByRegisteredDateRange_matchesTodayExcludesOutsideRange() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("RegisteredToday");
+        WorkerResponse worker = createWorker(department, designation.id());
+        LocalDate today = LocalDate.now();
+
+        PageResponse<WorkerSummaryResponse> withinRange = workerService.list(
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null,
+                        today, today),
+                PageRequest.of(0, 50));
+        assertThat(withinRange.content()).extracting(WorkerSummaryResponse::id).contains(worker.id());
+
+        PageResponse<WorkerSummaryResponse> beforeRegistration = workerService.list(
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null,
+                        null, today.minusDays(1)),
+                PageRequest.of(0, 50));
+        assertThat(beforeRegistration.content()).extracting(WorkerSummaryResponse::id).doesNotContain(worker.id());
+
+        PageResponse<WorkerSummaryResponse> afterRegistration = workerService.list(
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null,
+                        today.plusDays(1), null),
+                PageRequest.of(0, 50));
+        assertThat(afterRegistration.content()).extracting(WorkerSummaryResponse::id).doesNotContain(worker.id());
     }
 
     // ---- sorting --------------------------------------------------------------------------------
@@ -171,18 +201,18 @@ class WorkerBulkOperationsIntegrationTest {
         DepartmentResponse department = createDepartment();
         DesignationResponse designation = createDesignation("SortWorker");
         String prefix = "SortW" + unique();
-        WorkerResponse beta = workerService.create(new CreateWorkerRequest("Test", null, prefix + " Beta", Gender.MALE,
-                null, uniqueMobile(), null, department.id(), null, Set.of(designation.id()), designation.id(), Set.of()));
-        WorkerResponse alpha = workerService.create(new CreateWorkerRequest("Test", null, prefix + " Alpha", Gender.MALE,
-                null, uniqueMobile(), null, department.id(), null, Set.of(designation.id()), designation.id(), Set.of()));
+        WorkerResponse beta = workerService.create(new CreateWorkerRequest("Test", null, prefix + " Beta", null, Gender.MALE,
+                null, uniqueMobile(), null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
+        WorkerResponse alpha = workerService.create(new CreateWorkerRequest("Test", null, prefix + " Alpha", null, Gender.MALE,
+                null, uniqueMobile(), null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         PageResponse<WorkerSummaryResponse> ascending = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 100, Sort.by("lastName").ascending()));
         assertThat(ascending.content()).extracting(WorkerSummaryResponse::id).containsExactly(alpha.id(), beta.id());
 
         PageResponse<WorkerSummaryResponse> descending = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 100, Sort.by("lastName").descending()));
         assertThat(descending.content()).extracting(WorkerSummaryResponse::id).containsExactly(beta.id(), alpha.id());
     }
@@ -248,7 +278,7 @@ class WorkerBulkOperationsIntegrationTest {
         WorkerResponse worker = createWorker(department, designation.id());
 
         byte[] csvBytes = workerService.exportToCsv(Set.of(),
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null));
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null));
         String csv = new String(csvBytes, StandardCharsets.UTF_8);
 
         assertThat(csv).contains(worker.workerCode());
@@ -259,8 +289,8 @@ class WorkerBulkOperationsIntegrationTest {
         DepartmentResponse department = createDepartment();
         DesignationResponse designation = createDesignation("ExportQuoting");
         String trickyLastName = "Quoted \"Nickname\", Surname " + unique();
-        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, trickyLastName, Gender.MALE,
-                null, uniqueMobile(), null, department.id(), null, Set.of(designation.id()), designation.id(), Set.of()));
+        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, trickyLastName, null, Gender.MALE,
+                null, uniqueMobile(), null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         byte[] csvBytes = workerService.exportToCsv(Set.of(worker.id()), emptyCriteria());
         String csv = new String(csvBytes, StandardCharsets.UTF_8);
@@ -279,7 +309,7 @@ class WorkerBulkOperationsIntegrationTest {
         WorkerResponse worker = createWorker(department, designation.id());
 
         PageResponse<WorkerSummaryResponse> beforeEnroll = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 50));
         assertThat(beforeEnroll.content()).hasSize(1);
         assertThat(beforeEnroll.content().get(0).id()).isEqualTo(worker.id());
@@ -288,7 +318,7 @@ class WorkerBulkOperationsIntegrationTest {
         faceAuthService.enroll(worker.id(), "face.jpg", "image/jpeg", FAKE_JPEG_BYTES, true, "127.0.0.1");
 
         PageResponse<WorkerSummaryResponse> afterEnroll = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 50));
         assertThat(afterEnroll.content()).hasSize(1);
         assertThat(afterEnroll.content().get(0).faceEnrolledAt()).isNotNull();
@@ -400,7 +430,7 @@ class WorkerBulkOperationsIntegrationTest {
         // Not just get() by id - the Specification/Criteria-based list() path is a genuinely
         // different query mechanism and needs its own proof that @SQLRestriction applies there too.
         PageResponse<WorkerSummaryResponse> result = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 50));
         assertThat(result.content()).extracting(WorkerSummaryResponse::id).doesNotContain(worker.id());
     }
@@ -426,13 +456,13 @@ class WorkerBulkOperationsIntegrationTest {
         DepartmentResponse department = createDepartment();
         DesignationResponse designation = createDesignation("DeleteFreesNumber");
         String mobileNumber = uniqueMobile();
-        WorkerResponse original = workerService.create(new CreateWorkerRequest("Test", null, "Original " + unique(),
-                Gender.MALE, null, mobileNumber, null, department.id(), null, Set.of(designation.id()), designation.id(), Set.of()));
+        WorkerResponse original = workerService.create(new CreateWorkerRequest("Test", null, "Original " + unique(), null,
+                Gender.MALE, null, mobileNumber, null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
         workerService.updateStatus(original.id(), WorkerStatus.INACTIVE, "Leaving the platform");
         workerService.delete(original.id());
 
-        WorkerResponse replacement = workerService.create(new CreateWorkerRequest("Test", null, "Replacement " + unique(),
-                Gender.MALE, null, mobileNumber, null, department.id(), null, Set.of(designation.id()), designation.id(), Set.of()));
+        WorkerResponse replacement = workerService.create(new CreateWorkerRequest("Test", null, "Replacement " + unique(), null,
+                Gender.MALE, null, mobileNumber, null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         assertThat(replacement.mobileNumber()).isEqualTo(mobileNumber);
         assertThat(replacement.id()).isNotEqualTo(original.id());

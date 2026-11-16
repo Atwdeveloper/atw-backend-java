@@ -127,16 +127,16 @@ class KycServiceIntegrationTest {
 
     private UUID createWorker() {
         TestMasterData md = setupMasterData();
-        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(),
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null,
+        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null,
+                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of()));
         return worker.id();
     }
 
     private WorkerResponse createWorkerWithAadhaarVerification(UUID verificationId) {
         TestMasterData md = setupMasterData();
-        return workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(),
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null,
+        return workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null,
+                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of(), verificationId));
     }
 

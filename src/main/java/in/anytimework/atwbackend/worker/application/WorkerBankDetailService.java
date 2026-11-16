@@ -1,5 +1,7 @@
 package in.anytimework.atwbackend.worker.application;
 
+import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
+import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.security.PermissionChecker;
 import in.anytimework.atwbackend.shared.security.PiiMasking;
@@ -11,14 +13,19 @@ import in.anytimework.atwbackend.worker.domain.WorkerRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
  * A worker's bank/payout details; the account number is encrypted at rest. {@code workers.view}
  * (checked at the controller) only ever sees a masked account number from here; the full decrypted
- * value is returned only to a caller who also holds {@code kyc.view_sensitive} - reusing that
- * permission rather than minting a worker-specific one, since a bank account number is comparably
- * identifying to the Aadhaar/PAN numbers it already gates.
+ * value is returned only to a caller who also holds {@code workers.view_bank_details} - a dedicated
+ * unmask permission, independent of {@code kyc.view_sensitive} (which unmasks Aadhaar/PAN/UAN/ESIC
+ * instead). Bank account numbers and government identity numbers are different risk categories -
+ * financial/payout fraud vs. identity-document exposure - so granting one no longer silently grants
+ * the other. Mirrors how {@code admin_staff.view_bank_details}/{@code admin_staff.view_kyc} already
+ * split the same two concerns for the identity module's own staff records.
  */
 @Service
 public class WorkerBankDetailService {
@@ -26,12 +33,17 @@ public class WorkerBankDetailService {
     private final WorkerRepository workers;
     private final WorkerBankDetailRepository bankDetails;
     private final PermissionChecker permissionChecker;
+    private final BankVerificationPort bankVerificationPort;
+    private final Clock clock;
 
     public WorkerBankDetailService(WorkerRepository workers, WorkerBankDetailRepository bankDetails,
-                                   PermissionChecker permissionChecker) {
+                                   PermissionChecker permissionChecker, BankVerificationPort bankVerificationPort,
+                                   Clock clock) {
         this.workers = workers;
         this.bankDetails = bankDetails;
         this.permissionChecker = permissionChecker;
+        this.bankVerificationPort = bankVerificationPort;
+        this.clock = clock;
     }
 
     @Transactional(readOnly = true)
@@ -51,6 +63,46 @@ public class WorkerBankDetailService {
         return toDto(detail);
     }
 
+    /**
+     * Calls the configured {@link BankVerificationPort} with the account/IFSC already on file and
+     * applies this codebase's match policy: the provider must confirm the account exists, and if it
+     * returns a name-at-account at all, that name must reasonably match (case/whitespace-insensitive)
+     * the worker's declared {@code accountHolderName}. A provider that doesn't return a name (e.g. the
+     * default stub) skips the name check entirely rather than blocking on it. Nothing is persisted
+     * unless both checks pass - {@code verified}/{@code verifiedAt} are never settable any other way,
+     * closing a gap the legacy app had (it let a client set its equivalent flag directly, bypassing
+     * any real vendor check).
+     */
+    @Transactional
+    public WorkerBankDetailResponse verify(UUID workerId) {
+        requireWorkerExists(workerId);
+        WorkerBankDetail detail = bankDetails.findByWorkerId(workerId)
+                .orElseThrow(() -> new BusinessRuleException("No bank details on file for this worker yet."));
+
+        BankVerificationResult result = bankVerificationPort.verify(detail.getAccountNumber(), detail.getIfscCode());
+        if (!result.exists()) {
+            throw new BusinessRuleException(
+                    "The bank could not confirm this account - please re-check the account number and IFSC code.");
+        }
+        if (result.nameAtBank() != null && !namesMatch(detail.getAccountHolderName(), result.nameAtBank())) {
+            throw new ConflictException(
+                    "The bank's name on this account does not match the declared account holder name - "
+                            + "please correct it and try again.");
+        }
+
+        detail.markVerified(clock.instant());
+        detail = bankDetails.save(detail);
+        return toDto(detail);
+    }
+
+    private static boolean namesMatch(String declared, String atBank) {
+        return normalize(declared).equals(normalize(atBank));
+    }
+
+    private static String normalize(String value) {
+        return value == null ? "" : value.trim().replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
+    }
+
     private void requireWorkerExists(UUID workerId) {
         if (!workers.existsById(workerId)) {
             throw new ResourceNotFoundException("Worker not found");
@@ -58,7 +110,7 @@ public class WorkerBankDetailService {
     }
 
     private WorkerBankDetailResponse toDto(WorkerBankDetail detail) {
-        boolean unmasked = permissionChecker.has("kyc.view_sensitive");
+        boolean unmasked = permissionChecker.has("workers.view_bank_details");
         String accountNumber = unmasked ? detail.getAccountNumber() : PiiMasking.maskTail(detail.getAccountNumber());
         return new WorkerBankDetailResponse(detail.getAccountHolderName(), detail.getBankName(), accountNumber,
                 detail.getIfscCode(), detail.getBranchName(), detail.isVerified(), detail.getVerifiedAt());

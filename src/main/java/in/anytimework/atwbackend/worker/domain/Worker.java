@@ -55,6 +55,15 @@ public class Worker extends BaseEntity {
     @Column(name = "last_name", nullable = false, length = 100)
     private String lastName;
 
+    /**
+     * Optional. Raw as declared/captured - e.g. via the Aadhaar e-KYC wizard's "care of" value, which
+     * UIDAI often prefixes ({@code "S/O: Ramesh Kumar"}) rather than returning a bare name; this field
+     * stores whatever was given/captured without attempting to strip such a prefix (see
+     * {@code AadhaarVerifiedDetails}' Javadoc for why).
+     */
+    @Column(name = "father_name", length = 255)
+    private String fatherName;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "gender", nullable = false, length = 20)
     private Gender gender;
@@ -69,11 +78,16 @@ public class Worker extends BaseEntity {
     @Column(name = "personal_email", length = 191)
     private String personalEmail;
 
-    @Column(name = "department_id", nullable = false)
+    /** Optional - not every worker is classified into a department (see Worker's class Javadoc history). */
+    @Column(name = "department_id")
     private UUID departmentId;
 
     @Column(name = "industry_id")
     private UUID industryId;
+
+    /** Optional, self-reported years of prior work experience - a plain count, no implied employer history. */
+    @Column(name = "work_experience_years")
+    private Integer workExperienceYears;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
@@ -92,33 +106,38 @@ public class Worker extends BaseEntity {
         // required by JPA
     }
 
-    public Worker(String workerCode, String firstName, String middleName, String lastName, Gender gender,
-                 LocalDate dateOfBirth, String mobileNumber, String personalEmail, UUID departmentId, UUID industryId) {
+    public Worker(String workerCode, String firstName, String middleName, String lastName, String fatherName,
+                 Gender gender, LocalDate dateOfBirth, String mobileNumber, String personalEmail,
+                 UUID departmentId, UUID industryId, Integer workExperienceYears) {
         this.workerCode = workerCode;
         this.firstName = firstName;
         this.middleName = middleName;
         this.lastName = lastName;
+        this.fatherName = fatherName;
         this.gender = gender;
         this.dateOfBirth = dateOfBirth;
         this.mobileNumber = mobileNumber;
         this.personalEmail = personalEmail;
         this.departmentId = departmentId;
         this.industryId = industryId;
+        this.workExperienceYears = workExperienceYears;
         this.status = WorkerStatus.REGISTERED;
     }
 
-    public void updateProfile(String firstName, String middleName, String lastName, Gender gender,
+    public void updateProfile(String firstName, String middleName, String lastName, String fatherName, Gender gender,
                               LocalDate dateOfBirth, String mobileNumber, String personalEmail,
-                              UUID departmentId, UUID industryId) {
+                              UUID departmentId, UUID industryId, Integer workExperienceYears) {
         this.firstName = firstName;
         this.middleName = middleName;
         this.lastName = lastName;
+        this.fatherName = fatherName;
         this.gender = gender;
         this.dateOfBirth = dateOfBirth;
         this.mobileNumber = mobileNumber;
         this.personalEmail = personalEmail;
         this.departmentId = departmentId;
         this.industryId = industryId;
+        this.workExperienceYears = workExperienceYears;
     }
 
     /** Explicit target status + optional reason - never a blind toggle. See WorkerService for transition rules. */
