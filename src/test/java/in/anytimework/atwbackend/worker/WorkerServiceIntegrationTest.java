@@ -85,8 +85,8 @@ class WorkerServiceIntegrationTest {
     }
 
     private CreateWorkerRequest baseRequest(DepartmentResponse department, UUID designationId) {
-        return new CreateWorkerRequest("Ramesh", null, "Kumar " + unique(), Gender.MALE, null,
-                uniqueMobile(), null, department.id(), null, Set.of(designationId), designationId, Set.of());
+        return new CreateWorkerRequest("Ramesh", null, "Kumar " + unique(), null, Gender.MALE, null,
+                uniqueMobile(), null, department.id(), null, null, Set.of(designationId), designationId, Set.of());
     }
 
     @Test
@@ -95,8 +95,8 @@ class WorkerServiceIntegrationTest {
         DesignationResponse designation = createDesignation("Electrician");
         SkillResponse skill = createSkill(designation.id(), "House Wiring");
 
-        CreateWorkerRequest request = new CreateWorkerRequest("Ramesh", "Kumar", "Yadav " + unique(), Gender.MALE,
-                null, uniqueMobile(), "ramesh@example.com", department.id(), null,
+        CreateWorkerRequest request = new CreateWorkerRequest("Ramesh", "Kumar", "Yadav " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), "ramesh@example.com", department.id(), null, null,
                 Set.of(designation.id()), designation.id(), Set.of(skill.id()));
 
         WorkerResponse created = workerService.create(request);
@@ -119,8 +119,8 @@ class WorkerServiceIntegrationTest {
         CreateWorkerRequest request = baseRequest(department, designation.id());
         workerService.create(request);
 
-        CreateWorkerRequest duplicate = new CreateWorkerRequest("Other", null, "Worker " + unique(), Gender.MALE,
-                null, request.mobileNumber(), null, department.id(), null,
+        CreateWorkerRequest duplicate = new CreateWorkerRequest("Other", null, "Worker " + unique(), null, Gender.MALE,
+                null, request.mobileNumber(), null, department.id(), null, null,
                 Set.of(designation.id()), designation.id(), Set.of());
 
         assertThatThrownBy(() -> workerService.create(duplicate)).isInstanceOf(ConflictException.class);
@@ -134,8 +134,8 @@ class WorkerServiceIntegrationTest {
         UUID d3 = createDesignation("D3").id();
         UUID d4 = createDesignation("D4").id();
 
-        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE,
-                null, uniqueMobile(), null, department.id(), null, Set.of(d1, d2, d3, d4), d1, Set.of());
+        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), null, department.id(), null, null, Set.of(d1, d2, d3, d4), d1, Set.of());
 
         assertThatThrownBy(() -> workerService.create(request))
                 .isInstanceOf(ValidationException.class)
@@ -148,8 +148,8 @@ class WorkerServiceIntegrationTest {
         UUID d1 = createDesignation("D1").id();
         UUID other = createDesignation("Other").id();
 
-        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE,
-                null, uniqueMobile(), null, department.id(), null, Set.of(d1), other, Set.of());
+        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), null, department.id(), null, null, Set.of(d1), other, Set.of());
 
         assertThatThrownBy(() -> workerService.create(request))
                 .isInstanceOf(ValidationException.class)
@@ -163,8 +163,8 @@ class WorkerServiceIntegrationTest {
         DesignationResponse designationB = createDesignation("Carpenter");
         SkillResponse skillUnderB = createSkill(designationB.id(), "Furniture Making");
 
-        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE,
-                null, uniqueMobile(), null, department.id(), null,
+        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), null, department.id(), null, null,
                 Set.of(designationA.id()), designationA.id(), Set.of(skillUnderB.id()));
 
         assertThatThrownBy(() -> workerService.create(request))
@@ -173,10 +173,57 @@ class WorkerServiceIntegrationTest {
     }
 
     @Test
+    void create_withNoDepartment_succeeds() {
+        // Department is optional - not enforced in this rebuild, matching legacy's own (never
+        // enforced) behavior - see V32__worker_profile_fields.sql.
+        DesignationResponse designation = createDesignation("NoDept");
+        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), null, null, null, null, Set.of(designation.id()), designation.id(), Set.of());
+
+        WorkerResponse created = workerService.create(request);
+
+        assertThat(created.departmentId()).isNull();
+    }
+
+    @Test
+    void create_withFatherNameAndWorkExperience_roundTrips() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("Experienced");
+        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), "S/O: Suresh Kumar",
+                Gender.MALE, null, uniqueMobile(), null, department.id(), null, 5,
+                Set.of(designation.id()), designation.id(), Set.of());
+
+        WorkerResponse created = workerService.create(request);
+
+        assertThat(created.fatherName()).isEqualTo("S/O: Suresh Kumar");
+        assertThat(created.workExperienceYears()).isEqualTo(5);
+
+        WorkerResponse fetched = workerService.get(created.id());
+        assertThat(fetched.fatherName()).isEqualTo("S/O: Suresh Kumar");
+        assertThat(fetched.workExperienceYears()).isEqualTo(5);
+    }
+
+    @Test
+    void update_changesFatherNameAndWorkExperience() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("UpdateExperience");
+        WorkerResponse created = workerService.create(baseRequest(department, designation.id()));
+        assertThat(created.workExperienceYears()).isNull();
+
+        UpdateWorkerRequest update = new UpdateWorkerRequest(created.firstName(), created.middleName(),
+                created.lastName(), "D/O: Priya Sharma", Gender.FEMALE, null, created.mobileNumber(),
+                null, department.id(), null, 3);
+        WorkerResponse updated = workerService.update(created.id(), update);
+
+        assertThat(updated.fatherName()).isEqualTo("D/O: Priya Sharma");
+        assertThat(updated.workExperienceYears()).isEqualTo(3);
+    }
+
+    @Test
     void create_withUnknownDepartment_isRejected() {
         DesignationResponse designation = createDesignation("Driver");
-        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE,
-                null, uniqueMobile(), null, UUID.randomUUID(), null, Set.of(designation.id()), designation.id(), Set.of());
+        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), null, UUID.randomUUID(), null, null, Set.of(designation.id()), designation.id(), Set.of());
 
         assertThatThrownBy(() -> workerService.create(request)).isInstanceOf(ValidationException.class);
     }
@@ -188,8 +235,8 @@ class WorkerServiceIntegrationTest {
         WorkerResponse created = workerService.create(baseRequest(department, designation.id()));
 
         String newMobile = uniqueMobile();
-        UpdateWorkerRequest update = new UpdateWorkerRequest("Updated", "Name", created.lastName(), Gender.FEMALE,
-                null, newMobile, "updated@example.com", department.id(), null);
+        UpdateWorkerRequest update = new UpdateWorkerRequest("Updated", "Name", created.lastName(), null, Gender.FEMALE,
+                null, newMobile, "updated@example.com", department.id(), null, null);
         WorkerResponse updated = workerService.update(created.id(), update);
 
         assertThat(updated.firstName()).isEqualTo("Updated");
@@ -204,8 +251,8 @@ class WorkerServiceIntegrationTest {
         SkillResponse skillUnderA = createSkill(designationA.id(), "Pipe Fitting");
         DesignationResponse designationB = createDesignation("Rigger");
 
-        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE,
-                null, uniqueMobile(), null, department.id(), null,
+        CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
+                null, uniqueMobile(), null, department.id(), null, null,
                 Set.of(designationA.id()), designationA.id(), Set.of(skillUnderA.id()));
         WorkerResponse created = workerService.create(request);
         assertThat(created.skills()).hasSize(1);
@@ -251,11 +298,11 @@ class WorkerServiceIntegrationTest {
         DesignationResponse designation = createDesignation("Cook " + unique());
         String findableFirstName = "Findme" + unique();
         WorkerResponse created = workerService.create(
-                new CreateWorkerRequest(findableFirstName, null, "Unique" + unique(), Gender.MALE, null,
-                        uniqueMobile(), null, department.id(), null, Set.of(designation.id()), designation.id(), Set.of()));
+                new CreateWorkerRequest(findableFirstName, null, "Unique" + unique(), null, Gender.MALE, null,
+                        uniqueMobile(), null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         PageResponse<WorkerSummaryResponse> byStatus = workerService.list(
-                new WorkerSearchCriteria(Set.of(WorkerStatus.REGISTERED), null, null, Set.of(designation.id()), null, null, null),
+                new WorkerSearchCriteria(Set.of(WorkerStatus.REGISTERED), null, null, Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 20));
         assertThat(byStatus.content()).extracting(WorkerSummaryResponse::id).contains(created.id());
         assertThat(byStatus.content()).allSatisfy(w -> assertThat(w.primaryDesignationName()).isEqualTo(designation.name()));
@@ -264,12 +311,12 @@ class WorkerServiceIntegrationTest {
         // database accumulates rows across every run in a session, so an unscoped, unsorted page of 20
         // can't be assumed to still include this run's row once enough prior runs share the same term.
         PageResponse<WorkerSummaryResponse> bySearch = workerService.list(
-                new WorkerSearchCriteria(null, null, null, null, null, null, findableFirstName),
+                new WorkerSearchCriteria(null, null, null, null, null, null, findableFirstName, null, null),
                 PageRequest.of(0, 20));
         assertThat(bySearch.content()).extracting(WorkerSummaryResponse::id).contains(created.id());
 
         PageResponse<WorkerSummaryResponse> byWrongStatus = workerService.list(
-                new WorkerSearchCriteria(Set.of(WorkerStatus.BLACKLISTED), null, null, Set.of(designation.id()), null, null, null),
+                new WorkerSearchCriteria(Set.of(WorkerStatus.BLACKLISTED), null, null, Set.of(designation.id()), null, null, null, null, null),
                 PageRequest.of(0, 20));
         assertThat(byWrongStatus.content()).extracting(WorkerSummaryResponse::id).doesNotContain(created.id());
     }

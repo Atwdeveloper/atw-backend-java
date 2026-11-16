@@ -191,6 +191,9 @@ public class WorkerService {
         if (StringUtils.hasText(criteria.search())) {
             predicates.add(WorkerSpecifications.matchesSearch(criteria.search()));
         }
+        if (criteria.registeredFrom() != null || criteria.registeredTo() != null) {
+            predicates.add(WorkerSpecifications.registeredBetween(criteria.registeredFrom(), criteria.registeredTo()));
+        }
         if (criteria.kycStatus() != null && !criteria.kycStatus().isEmpty()) {
             Set<UUID> matchingWorkerIds = kycService.findWorkerIdsByStatus(criteria.kycStatus());
             if (matchingWorkerIds.isEmpty()) {
@@ -206,7 +209,7 @@ public class WorkerService {
         if (workers.existsByMobileNumber(request.mobileNumber())) {
             throw new ConflictException("A worker with this mobile number already exists.");
         }
-        if (!departmentLookup.exists(request.departmentId())) {
+        if (request.departmentId() != null && !departmentLookup.exists(request.departmentId())) {
             throw new ValidationException("Unknown department id.");
         }
         if (request.industryId() != null && !industryLookup.exists(request.industryId())) {
@@ -216,8 +219,8 @@ public class WorkerService {
         validateSkillSelection(request.skillIds(), request.designationIds());
 
         Worker worker = new Worker(generateWorkerCode(), request.firstName(), request.middleName(), request.lastName(),
-                request.gender(), request.dateOfBirth(), request.mobileNumber(), request.personalEmail(),
-                request.departmentId(), request.industryId());
+                request.fatherName(), request.gender(), request.dateOfBirth(), request.mobileNumber(),
+                request.personalEmail(), request.departmentId(), request.industryId(), request.workExperienceYears());
         worker = workers.save(worker);
 
         saveDesignations(worker.getId(), request.designationIds(), request.primaryDesignationId());
@@ -247,15 +250,15 @@ public class WorkerService {
                 && workers.existsByMobileNumberAndIdNot(request.mobileNumber(), id)) {
             throw new ConflictException("A worker with this mobile number already exists.");
         }
-        if (!departmentLookup.exists(request.departmentId())) {
+        if (request.departmentId() != null && !departmentLookup.exists(request.departmentId())) {
             throw new ValidationException("Unknown department id.");
         }
         if (request.industryId() != null && !industryLookup.exists(request.industryId())) {
             throw new ValidationException("Unknown industry id.");
         }
-        worker.updateProfile(request.firstName(), request.middleName(), request.lastName(), request.gender(),
-                request.dateOfBirth(), request.mobileNumber(), request.personalEmail(),
-                request.departmentId(), request.industryId());
+        worker.updateProfile(request.firstName(), request.middleName(), request.lastName(), request.fatherName(),
+                request.gender(), request.dateOfBirth(), request.mobileNumber(), request.personalEmail(),
+                request.departmentId(), request.industryId(), request.workExperienceYears());
         workers.save(worker);
         return toResponse(worker);
     }
@@ -669,8 +672,9 @@ public class WorkerService {
         FaceEnrollmentDto faceEnrollment = faceAuthService.getEnrollment(worker.getId());
 
         return new WorkerResponse(worker.getId(), worker.getWorkerCode(), worker.getFirstName(), worker.getMiddleName(),
-                worker.getLastName(), worker.getGender(), worker.getDateOfBirth(), worker.getMobileNumber(),
-                worker.getPersonalEmail(), worker.getDepartmentId(), worker.getIndustryId(), worker.getStatus(),
+                worker.getLastName(), worker.getFatherName(), worker.getGender(), worker.getDateOfBirth(),
+                worker.getMobileNumber(), worker.getPersonalEmail(), worker.getDepartmentId(), worker.getIndustryId(),
+                worker.getWorkExperienceYears(), worker.getStatus(),
                 worker.getStatusReason(), photoUrl, designationRefs, skillRefs, kycStatus, faceEnrollment,
                 worker.getCreatedAt());
     }

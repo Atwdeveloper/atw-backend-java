@@ -57,8 +57,8 @@ class WorkerServiceStatusGuardTest {
     private final CurrentAdmin currentAdmin = mock(CurrentAdmin.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-10T06:00:00Z"), ZoneOffset.UTC);
 
-    private final Worker worker = new Worker("WRK0000001", "Ramesh", null, "Kumar", Gender.MALE,
-            null, "9876543210", null, UUID.randomUUID(), null);
+    private final Worker worker = new Worker("WRK0000001", "Ramesh", null, "Kumar", null, Gender.MALE,
+            null, "9876543210", null, UUID.randomUUID(), null, null);
 
     private WorkerService service() {
         return new WorkerService(workers, workerDesignations, workerSkills, statusHistory, departmentLookup,

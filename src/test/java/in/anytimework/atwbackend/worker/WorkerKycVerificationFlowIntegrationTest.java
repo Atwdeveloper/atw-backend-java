@@ -110,8 +110,8 @@ class WorkerKycVerificationFlowIntegrationTest {
         TestMasterData md = setupMasterData();
         UUID verificationId = verifyAadhaarViaStub();
 
-        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Flow", null, "Test " + unique(),
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null,
+        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Flow", null, "Test " + unique(), null,
+                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of(), verificationId));
 
         assertThat(kycService.getStatus(worker.id())).isEqualTo(KycStatus.VERIFIED);
@@ -133,8 +133,8 @@ class WorkerKycVerificationFlowIntegrationTest {
     @Test
     void verifiedKycDoesNotReactivateAWorkerTheAdminHasSuspended() {
         TestMasterData md = setupMasterData();
-        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Flow", null, "Test " + unique(),
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null,
+        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Flow", null, "Test " + unique(), null,
+                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of()));
 
         workerService.updateStatus(worker.id(), WorkerStatus.SUSPENDED, "Pending investigation");

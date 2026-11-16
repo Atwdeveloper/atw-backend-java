@@ -38,13 +38,15 @@ import java.util.Locale;
  * tries UIDAI's standard {@code dd-MM-yyyy} first, then ISO {@code yyyy-MM-dd} as a fallback, before
  * failing loudly rather than silently mis-parsing a worker's date of birth.</p>
  *
- * <p>Maps onto today's existing {@link AadhaarVerifiedDetails} contract only - deliberately does NOT
- * capture {@code care_of}/father's name or the granular address breakdown (house/street/landmark/
- * locality/vtc/subdistrict/post_office) Sandbox.co.in's response also includes, even though legacy
- * captures some of those: confirmed with the developer 2026-11-11 as a gap not being filled this
- * round. {@code addressLine1} is Sandbox's own pre-formatted {@code full_address} string (the same
- * field legacy's own top-level {@code 'address'} key uses), not a hand-assembled concatenation of the
- * granular fields.</p>
+ * <p>Maps onto today's existing {@link AadhaarVerifiedDetails} contract, plus {@code care_of} (as of
+ * 2026-11-16 - previously a known, explicitly-flagged gap) - deliberately still does NOT capture the
+ * granular address breakdown (house/street/landmark/locality/vtc/subdistrict/post_office) Sandbox.co.in's
+ * response also includes, even though legacy captures some of those: confirmed with the developer
+ * 2026-11-11 as a gap not being filled. {@code addressLine1} is Sandbox's own pre-formatted
+ * {@code full_address} string (the same field legacy's own top-level {@code 'address'} key uses), not
+ * a hand-assembled concatenation of the granular fields. {@code care_of} is passed through to
+ * {@code fatherName} exactly as Sandbox returns it, prefix and all - see {@link AadhaarVerifiedDetails}'s
+ * Javadoc for why it is never stripped/parsed here.</p>
  */
 @Component
 @ConditionalOnProperty(name = "atw.aadhaar-kyc.provider", havingValue = "sandbox")
@@ -117,6 +119,7 @@ class SandboxAadhaarKycAdapter implements AadhaarKycPort {
         AddressWire address = data.address();
         return new AadhaarVerifiedDetails(
                 data.name(),
+                data.careOf(),
                 data.gender(),
                 parseDob(data.dateOfBirth()),
                 data.fullAddress(),
@@ -228,6 +231,7 @@ class SandboxAadhaarKycAdapter implements AadhaarKycPort {
 
     private record VerifiedDataWire(
             String name,
+            @JsonProperty("care_of") String careOf,
             String gender,
             @JsonProperty("date_of_birth") String dateOfBirth,
             String photo,

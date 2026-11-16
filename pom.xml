@@ -223,6 +223,12 @@
 							<goal>compile</goal>
 						</goals>
 						<configuration>
+							<!-- fork=true: in-process javac (the default) has been observed to crash with an
+							     internal NPE ("Cannot load from object array because this.hashes is null")
+							     on this JDK/compiler-plugin combination whenever there are several compile
+							     errors to report at once - forking runs javac in its own process instead,
+							     which does not hit this. Harmless otherwise, just a marginally slower start. -->
+							<fork>true</fork>
 							<annotationProcessorPaths>
 								<path>
 									<groupId>org.projectlombok</groupId>
@@ -238,6 +244,8 @@
 							<goal>testCompile</goal>
 						</goals>
 						<configuration>
+							<!-- See the default-compile execution above for why fork=true is needed here. -->
+							<fork>true</fork>
 							<annotationProcessorPaths>
 								<path>
 									<groupId>org.projectlombok</groupId>

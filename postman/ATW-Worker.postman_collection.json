@@ -31,17 +31,19 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/v1/admin/workers?status=ACTIVE&status=REGISTERED&search=sharma&sort=createdAt,desc",
+              "raw": "{{baseUrl}}/api/v1/admin/workers?status=ACTIVE&status=REGISTERED&search=sharma&sort=createdAt,desc&registeredFrom=2026-01-01&registeredTo=2026-12-31",
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers"],
               "query": [
                 {"key": "status", "value": "ACTIVE"},
                 {"key": "status", "value": "REGISTERED"},
                 {"key": "search", "value": "sharma"},
-                {"key": "sort", "value": "createdAt,desc"}
+                {"key": "sort", "value": "createdAt,desc"},
+                {"key": "registeredFrom", "value": "2026-01-01"},
+                {"key": "registeredTo", "value": "2026-12-31"}
               ]
             },
-            "description": "**Permission:** `workers.view`.\n\nPaginated, filterable, sortable list of workers, returned as the lighter `WorkerSummaryResponse` (no signed photo URL, no full `faceEnrollment` object - see Get Worker for those).\n\n**Filters** (all optional, all independent, repeat a query param for multiselect e.g. `?status=ACTIVE&status=REGISTERED`):\n- `status`, `departmentId`, `industryId`, `designationId`, `skillId`, `kycStatus` - a non-empty filter matches ANY of its own values (OR within the filter); every non-empty filter is ANDed together with the others.\n- `kycStatus` is resolved from the separate `kyc` module, not a column on this table - filtering by it costs one extra lookup query.\n- `search` - free text against first/last name, mobile number, worker code, and email.\n\n**Pagination/sort:** standard Spring pagination (`page`, `size`, `sort`). Default `page-size`/`max-page-size` are controlled centrally by `spring.data.web.pageable.default-page-size` / `.max-page-size` (100 / 500 at the time of writing, in `application.properties`) - not by this endpoint. Default sort is `createdAt,desc` (newest first) when `sort` is omitted. `sort` only accepts real, directly-queryable columns: `firstName`, `lastName`, `workerCode`, `mobileNumber`, `status`, `createdAt` - notably **not** `kycStatus` or any batch-resolved display name (e.g. `primaryDesignationName`), since those aren't columns on this table at all.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unsupported `sort` property | `VALIDATION_ERROR` | 400 |",
+            "description": "**Permission:** `workers.view`.\n\nPaginated, filterable, sortable list of workers, returned as the lighter `WorkerSummaryResponse` (no signed photo URL, no full `faceEnrollment` object - see Get Worker for those).\n\n**Filters** (all optional, all independent, repeat a query param for multiselect e.g. `?status=ACTIVE&status=REGISTERED`):\n- `status`, `departmentId`, `industryId`, `designationId`, `skillId`, `kycStatus` - a non-empty filter matches ANY of its own values (OR within the filter); every non-empty filter is ANDed together with the others.\n- `kycStatus` is resolved from the separate `kyc` module, not a column on this table - filtering by it costs one extra lookup query.\n- `search` - free text against first/last name, mobile number, worker code, and email.\n- `registeredFrom`/`registeredTo` (plain `YYYY-MM-DD` dates, either or both) - filters on the worker's registration (= creation) date, interpreted as whole UTC calendar days. There is no separate \"registration date\" field - this filters the same timestamp `createdAt` on the response represents, just as a date range instead of an exact value. **New 2026-11-16.**\n\n**Pagination/sort:** standard Spring pagination (`page`, `size`, `sort`). Default `page-size`/`max-page-size` are controlled centrally by `spring.data.web.pageable.default-page-size` / `.max-page-size` (100 / 500 at the time of writing, in `application.properties`) - not by this endpoint. Default sort is `createdAt,desc` (newest first) when `sort` is omitted. `sort` only accepts real, directly-queryable columns: `firstName`, `lastName`, `workerCode`, `mobileNumber`, `status`, `createdAt` - notably **not** `kycStatus` or any batch-resolved display name (e.g. `primaryDesignationName`), since those aren't columns on this table at all.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unsupported `sort` property | `VALIDATION_ERROR` | 400 |",
             "body": null
           },
           "event": [
@@ -115,7 +117,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers", "{{workerId}}"]
             },
-            "description": "**Permission:** `workers.view`.\n\nFull single-worker detail view, including a short-lived signed profile photo URL and the full `faceEnrollment` object (signed enrollment-photo URL included) when enrolled - both are resolved here only, never on the list endpoint, since this is called once per request rather than once per list row.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
+            "description": "**Permission:** `workers.view`.\n\nFull single-worker detail view, including a short-lived signed profile photo URL and the full `faceEnrollment` object (signed enrollment-photo URL included) when enrolled - both are resolved here only, never on the list endpoint, since this is called once per request rather than once per list row.\n\n**New fields (2026-11-16):** `fatherName` (nullable - often pre-filled from a live Aadhaar e-KYC verification's \"care of\" value, which may carry a prefix like `\"S/O: ...\"` exactly as UIDAI returned it, not stripped), `workExperienceYears` (nullable integer, 0-70). `departmentId` is now also nullable - department is no longer mandatory for a worker.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
           },
           "event": [
             {
@@ -150,7 +152,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"status\": \"ACTIVE\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": \"https://atwstorage.blob.core.windows.net/documents/worker-profile-photo/c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e.jpg?sv=2025-05-05&se=2026-11-13T10%3A15%3A00Z&sr=b&sp=r&sig=REDACTED\",\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [\n      {\"id\": \"9d0e1f2a-3b4c-4d5e-8f6a-7b8c9d0e1f2a\", \"name\": \"Wall Plastering\"}\n    ],\n    \"kycStatus\": \"VERIFIED\",\n    \"faceEnrollment\": {\n      \"workerId\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n      \"enrolled\": true,\n      \"enrolledAt\": \"2026-10-20T09:12:00Z\",\n      \"livenessConfidence\": 0.97,\n      \"photoUrl\": \"https://atwstorage.blob.core.windows.net/documents/face-enrollment/c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e.jpg?sv=2025-05-05&se=2026-11-13T10%3A15%3A00Z&sr=b&sp=r&sig=REDACTED\"\n    },\n    \"createdAt\": \"2026-09-01T06:30:00Z\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"fatherName\": \"S/O: Suresh Kumar\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"workExperienceYears\": 5,\n    \"status\": \"ACTIVE\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": \"https://atwstorage.blob.core.windows.net/documents/worker-profile-photo/c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e.jpg?sv=2025-05-05&se=2026-11-13T10%3A15%3A00Z&sr=b&sp=r&sig=REDACTED\",\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [\n      {\"id\": \"9d0e1f2a-3b4c-4d5e-8f6a-7b8c9d0e1f2a\", \"name\": \"Wall Plastering\"}\n    ],\n    \"kycStatus\": \"VERIFIED\",\n    \"faceEnrollment\": {\n      \"workerId\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n      \"enrolled\": true,\n      \"enrolledAt\": \"2026-10-20T09:12:00Z\",\n      \"livenessConfidence\": 0.97,\n      \"photoUrl\": \"https://atwstorage.blob.core.windows.net/documents/face-enrollment/c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e.jpg?sv=2025-05-05&se=2026-11-13T10%3A15%3A00Z&sr=b&sp=r&sig=REDACTED\"\n    },\n    \"createdAt\": \"2026-09-01T06:30:00Z\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "200 - OK (freshly registered, no KYC/photo/face yet)",
@@ -167,7 +169,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"status\": \"REGISTERED\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": null,\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"NOT_STARTED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-12T10:00:00Z\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"fatherName\": null,\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": null,\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"workExperienceYears\": null,\n    \"status\": \"REGISTERED\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": null,\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"NOT_STARTED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-12T10:00:00Z\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown worker id",
@@ -198,10 +200,10 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers"]
             },
-            "description": "**Permission:** `workers.create`.\n\nCreates a worker's core profile plus their initial designation(s)/skill(s). The new worker always starts at status `REGISTERED` (unless `aadhaarVerificationId` is given, in which case KYC verification auto-advances status to `ACTIVE` - see the second saved example below). Address and bank detail are **not** part of this request - use the dedicated sub-resource endpoints (Worker Address / Worker Bank Detail folders) once the worker exists.\n\n**Validation, checked in this order:**\n1. `mobileNumber` must be unique among active (non-deleted) workers.\n2. `departmentId` must reference an existing department.\n3. `industryId`, when given, must reference an existing industry.\n4. `designationIds` - 1 to 3 ids, every one must exist, and `primaryDesignationId` must be one of them.\n5. `skillIds` - each must belong to one of the selected `designationIds`.\n6. `aadhaarVerificationId`, when given, must reference a verification that is `VERIFIED` and not already consumed; the whole creation fails otherwise (rolled back, no worker is left behind).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| A referenced department/industry/designation id doesn't exist, or the designation/skill selection breaks a rule (e.g. more than 3 designations, `primaryDesignationId` not in `designationIds`, a skill outside the selected designations) | `VALIDATION_ERROR` | 400 |\n| `mobileNumber` already in use by another active worker | `CONFLICT` | 409 |\n\nThis request's Tests script saves the new id to `{{workerId}}` - every other folder in this collection needs it.",
+            "description": "**Permission:** `workers.create`.\n\nCreates a worker's core profile plus their initial designation(s)/skill(s). The new worker always starts at status `REGISTERED` (unless `aadhaarVerificationId` is given, in which case KYC verification auto-advances status to `ACTIVE` - see the second saved example below). Address and bank detail are **not** part of this request - use the dedicated sub-resource endpoints (Worker Address / Worker Bank Detail folders) once the worker exists. UAN/ESIC are also not part of this request - see the new **Worker Statutory Detail** folder below.\n\n**New optional fields (2026-11-16):** `fatherName` (string, often pre-filled from a live Aadhaar e-KYC verification's `fatherName`/`\"care of\"` value - see **ATW-Worker-KYC**'s Verify Aadhaar OTP response; not format-checked, may carry a prefix like `\"S/O: ...\"` exactly as UIDAI returned it), `workExperienceYears` (integer, 0-70).\n\n**`departmentId` is now optional** (was required) - omit it or send `null` for a worker with no department classification yet.\n\n**Validation, checked in this order:**\n1. `mobileNumber` must be unique among active (non-deleted) workers.\n2. `departmentId`, when given, must reference an existing department.\n3. `industryId`, when given, must reference an existing industry.\n4. `designationIds` - 1 to 3 ids, every one must exist, and `primaryDesignationId` must be one of them.\n5. `skillIds` - each must belong to one of the selected `designationIds`.\n6. `aadhaarVerificationId`, when given, must reference a verification that is `VERIFIED` and not already consumed; the whole creation fails otherwise (rolled back, no worker is left behind).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| A referenced department/industry/designation id doesn't exist, or the designation/skill selection breaks a rule (e.g. more than 3 designations, `primaryDesignationId` not in `designationIds`, a skill outside the selected designations) | `VALIDATION_ERROR` | 400 |\n| `mobileNumber` already in use by another active worker | `CONFLICT` | 409 |\n\nThis request's Tests script saves the new id to `{{workerId}}` - every other folder in this collection needs it.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\",\n  \"designationIds\": [\"{{designationId}}\"],\n  \"primaryDesignationId\": \"{{designationId}}\",\n  \"skillIds\": [\"{{skillId}}\"]\n}"
+              "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"fatherName\": \"S/O: Suresh Kumar\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\",\n  \"workExperienceYears\": 5,\n  \"designationIds\": [\"{{designationId}}\"],\n  \"primaryDesignationId\": \"{{designationId}}\",\n  \"skillIds\": [\"{{skillId}}\"]\n}"
             }
           },
           "event": [
@@ -238,14 +240,14 @@
                 },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\",\n  \"designationIds\": [\"{{designationId}}\"],\n  \"primaryDesignationId\": \"{{designationId}}\",\n  \"skillIds\": [\"{{skillId}}\"]\n}"
+                  "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"fatherName\": \"S/O: Suresh Kumar\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\",\n  \"workExperienceYears\": 5,\n  \"designationIds\": [\"{{designationId}}\"],\n  \"primaryDesignationId\": \"{{designationId}}\",\n  \"skillIds\": [\"{{skillId}}\"]\n}"
                 }
               },
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"status\": \"REGISTERED\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": null,\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"NOT_STARTED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-12T10:00:00Z\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"fatherName\": \"S/O: Suresh Kumar\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"workExperienceYears\": 5,\n    \"status\": \"REGISTERED\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": null,\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"NOT_STARTED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-12T10:00:00Z\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "200 - Created via Aadhaar verification (status auto-advances to ACTIVE)",
@@ -266,7 +268,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"status\": \"ACTIVE\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": \"https://atwstorage.blob.core.windows.net/documents/worker-profile-photo/c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e.jpg?sv=2025-05-05&se=2026-11-13T10%3A15%3A00Z&sr=b&sp=r&sig=REDACTED\",\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"VERIFIED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-13T10:00:00Z\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"fatherName\": \"S/O: Suresh Kumar\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"workExperienceYears\": null,\n    \"status\": \"ACTIVE\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": \"https://atwstorage.blob.core.windows.net/documents/worker-profile-photo/c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e.jpg?sv=2025-05-05&se=2026-11-13T10%3A15%3A00Z&sr=b&sp=r&sig=REDACTED\",\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"VERIFIED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-13T10:00:00Z\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "400 - More than 3 designations",
@@ -322,10 +324,10 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers", "{{workerId}}"]
             },
-            "description": "**Permission:** `workers.edit`.\n\nReplaces the worker's core profile fields (name, gender, DOB, mobile, email, department, industry). Designations/skills are untouched - use Worker Designations & Skills below. Same `mobileNumber` uniqueness and `departmentId`/`industryId` existence checks as Create, excluding this worker's own current row. Unlike Address/Bank Detail, this is **not** a progressively-optional request - `firstName`/`lastName`/`gender`/`mobileNumber`/`departmentId` are required on every call.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |\n| Another worker already has this `mobileNumber` | `CONFLICT` | 409 |\n| Unknown `departmentId`/`industryId` | `VALIDATION_ERROR` | 400 |",
+            "description": "**Permission:** `workers.edit`.\n\nReplaces the worker's core profile fields (name, gender, DOB, mobile, email, department, industry). Designations/skills are untouched - use Worker Designations & Skills below. Same `mobileNumber` uniqueness and `departmentId`/`industryId` existence checks as Create, excluding this worker's own current row. Unlike Address/Bank Detail, this is **not** a progressively-optional request - `firstName`/`lastName`/`gender`/`mobileNumber` are required on every call; `departmentId` is **not** (see below).\n\n**New optional fields (2026-11-16):** `fatherName`, `workExperienceYears` (integer, 0-70) - same shape as Create Worker.\n\n**`departmentId` is now optional** (was required) - omit it or send `null` to clear a worker's department classification.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |\n| Another worker already has this `mobileNumber` | `CONFLICT` | 409 |\n| Unknown `departmentId`/`industryId` | `VALIDATION_ERROR` | 400 |",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@newdomain.example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\"\n}"
+              "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"fatherName\": \"S/O: Suresh Kumar\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@newdomain.example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\",\n  \"workExperienceYears\": 6\n}"
             }
           },
           "event": [
@@ -358,14 +360,14 @@
                 },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@newdomain.example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\"\n}"
+                  "raw": "{\n  \"firstName\": \"Ramesh\",\n  \"middleName\": \"Kumar\",\n  \"lastName\": \"Sharma\",\n  \"fatherName\": \"S/O: Suresh Kumar\",\n  \"gender\": \"MALE\",\n  \"dateOfBirth\": \"1995-08-15\",\n  \"mobileNumber\": \"9876543210\",\n  \"personalEmail\": \"ramesh.kumar@newdomain.example.com\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"industryId\": \"{{industryId}}\",\n  \"workExperienceYears\": 6\n}"
                 }
               },
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@newdomain.example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"status\": \"REGISTERED\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": null,\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"NOT_STARTED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-12T10:00:00Z\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e\",\n    \"workerCode\": \"WRK0000042\",\n    \"firstName\": \"Ramesh\",\n    \"middleName\": \"Kumar\",\n    \"lastName\": \"Sharma\",\n    \"fatherName\": \"S/O: Suresh Kumar\",\n    \"gender\": \"MALE\",\n    \"dateOfBirth\": \"1995-08-15\",\n    \"mobileNumber\": \"9876543210\",\n    \"personalEmail\": \"ramesh.kumar@newdomain.example.com\",\n    \"departmentId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"workExperienceYears\": 6,\n    \"status\": \"REGISTERED\",\n    \"statusReason\": null,\n    \"profilePhotoUrl\": null,\n    \"designations\": [\n      {\"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\", \"name\": \"Mason\", \"primary\": true}\n    ],\n    \"skills\": [],\n    \"kycStatus\": \"NOT_STARTED\",\n    \"faceEnrollment\": null,\n    \"createdAt\": \"2026-11-12T10:00:00Z\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown worker id",
@@ -421,7 +423,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers", "export"]
             },
-            "description": "**Permission:** `workers.export`.\n\n**Returns a raw `text/csv` file download (`Content-Disposition: attachment; filename=\"workers.csv\"`), NOT the usual JSON envelope** - this is the only endpoint on this controller that doesn't return `ApiResponse`. Columns, in order: Worker Code, First Name, Last Name, Mobile Number, Status, KYC Status, Designation (primary designation's display name, blank if none), Department, Face Enrolled (`Yes`/`No`).\n\nGive `ids` for an exact set (unknown ids are silently skipped); otherwise every other field is an optional filter with the **exact same semantics as List Workers above** (a non-empty set matches ANY of its values; every non-empty field is ANDed together). Posting `{}` exports every worker, unfiltered. The whole CSV is built in memory, not streamed row-by-row - fine at today's admin-tool scale, called out here as a known, deliberate limitation.\n\n**Note on the Tests script below:** it checks the raw CSV body/headers instead of the usual envelope checks, since this endpoint genuinely isn't JSON.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `workers.export` | `ACCESS_DENIED` | 403 |",
+            "description": "**Permission:** `workers.export`.\n\n**Returns a raw `text/csv` file download (`Content-Disposition: attachment; filename=\"workers.csv\"`), NOT the usual JSON envelope** - this is the only endpoint on this controller that doesn't return `ApiResponse`. Columns, in order: Worker Code, First Name, Last Name, Mobile Number, Status, KYC Status, Designation (primary designation's display name, blank if none), Department, Face Enrolled (`Yes`/`No`).\n\nGive `ids` for an exact set (unknown ids are silently skipped); otherwise every other field is an optional filter with the **exact same semantics as List Workers above** (a non-empty set matches ANY of its values; every non-empty field is ANDed together), including the new `registeredFrom`/`registeredTo` date-range filter (2026-11-16). Posting `{}` exports every worker, unfiltered. The whole CSV is built in memory, not streamed row-by-row - fine at today's admin-tool scale, called out here as a known, deliberate limitation.\n\n**Note on the Tests script below:** it checks the raw CSV body/headers instead of the usual envelope checks, since this endpoint genuinely isn't JSON.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `workers.export` | `ACCESS_DENIED` | 403 |",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"ids\": [\"{{workerId}}\"]\n}"
@@ -1376,7 +1378,7 @@
     },
     {
       "name": "Worker Bank Detail",
-      "description": "A worker's bank/payout detail - basic onboarding data, not the (not-yet-built) `wallet` module's balance/transaction ledger; just \"where would a future payout go\". One account per worker. `accountNumber` is encrypted at rest and masked on every read (e.g. `**********5678`) unless the caller also holds `kyc.view_sensitive` - the same sensitivity gate the `kyc` module uses for Aadhaar/PAN numbers, since a bank account number is comparably identifying. `GET` requires `workers.view` and returns an all-`null`/`false` row (not a `404`) when nothing has been saved yet; `PUT` requires `workers.edit` and is a full replace of every field. Any change to the account details invalidates a prior verification (resets `verified`/`verifiedAt`) - there is no admin endpoint to (re-)verify one yet in this slice.",
+      "description": "A worker's bank/payout detail - basic onboarding data, not the (not-yet-built) `wallet` module's balance/transaction ledger; just \"where would a future payout go\". One account per worker. `accountNumber` is encrypted at rest and masked on every read (e.g. `**********5678`) unless the caller also holds **`workers.view_bank_details`** - a dedicated unmask permission (2026-11-16), independent of the `kyc` module's `kyc.view_sensitive` (which only covers Aadhaar/PAN/UAN/ESIC). `GET` requires `workers.view` and returns an all-`null`/`false` row (not a `404`) when nothing has been saved yet; `PUT` requires `workers.edit` and is a full replace of every field. Any change to the account details invalidates a prior verification (resets `verified`/`verifiedAt`). **New: Verify Worker Bank Detail** (2026-11-16) actually performs that verification against a configurable vendor (off by default; Sandbox.co.in wiring exists but is not yet confirmed against their live API) - it's the only way `verified`/`verifiedAt` can become `true`.",
       "item": [
         {
           "name": "Get Worker Bank Detail",
@@ -1388,7 +1390,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers", "{{workerId}}", "bank-detail"]
             },
-            "description": "**Permission:** `workers.view`.\n\n`accountNumber` is **masked** (e.g. `**********5678`) unless the caller also holds `kyc.view_sensitive` - the same sensitivity gate used for the Aadhaar/PAN numbers in the kyc module, since a bank account number is comparably identifying. When no bank detail has been saved yet, every field comes back null/false - not a 404.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
+            "description": "**Permission:** `workers.view`.\n\n`accountNumber` is **masked** (e.g. `**********5678`) unless the caller also holds `workers.view_bank_details` - a dedicated unmask permission, independent of the kyc module's `kyc.view_sensitive`. When no bank detail has been saved yet, every field comes back null/false - not a 404.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
           },
           "event": [
             {
@@ -1409,7 +1411,7 @@
           ],
           "response": [
             {
-              "name": "200 - OK (masked - caller lacks kyc.view_sensitive)",
+              "name": "200 - OK (masked - caller lacks workers.view_bank_details)",
               "originalRequest": {
                 "method": "GET",
                 "header": [],
@@ -1454,7 +1456,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers", "{{workerId}}", "bank-detail"]
             },
-            "description": "**Permission:** `workers.edit`.\n\nFull replace of the bank detail row - every field is optional, captured progressively. `accountNumber` is stored encrypted at rest and is masked back on every read (including this call's own response) unless the caller holds `kyc.view_sensitive`. Any change here invalidates a prior verification (`verified`/`verifiedAt` reset to `false`/`null`).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |",
+            "description": "**Permission:** `workers.edit`.\n\nFull replace of the bank detail row - every field is optional, captured progressively. `accountNumber` is stored encrypted at rest and is masked back on every read (including this call's own response) unless the caller holds `workers.view_bank_details`. Any change here invalidates a prior verification (`verified`/`verifiedAt` reset to `false`/`null`) - re-run **Verify Worker Bank Detail** after any edit.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"accountHolderName\": \"Ramesh Kumar Sharma\",\n  \"bankName\": \"State Bank of India\",\n  \"accountNumber\": \"33412345678\",\n  \"ifscCode\": \"SBIN0001234\",\n  \"branchName\": \"Jaipur Civil Lines Branch\"\n}"
@@ -1479,7 +1481,7 @@
           ],
           "response": [
             {
-              "name": "200 - Updated bank detail (masked unless kyc.view_sensitive)",
+              "name": "200 - Updated bank detail (masked unless workers.view_bank_details)",
               "originalRequest": {
                 "method": "PUT",
                 "header": [{"key": "Content-Type", "value": "application/json"}],
@@ -1519,6 +1521,317 @@
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
               "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Worker not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-13T10:00:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Verify Worker Bank Detail",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/bank-detail/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "workers", "{{workerId}}", "bank-detail", "verify"]
+            },
+            "description": "**Permission:** `workers.edit`.\n\n**New 2026-11-16.** Calls the configured bank-verification provider (off by default - see `atw.bank-verification.provider`; the default stub adapter always succeeds) with the account number/IFSC already on file, and checks the bank's own name-at-account against the declared account holder name (case/whitespace-insensitive). On success, sets `verified=true`/`verifiedAt` - **this is the only way those fields can ever change**; they can never be set directly through Update Worker Bank Detail. Fails with 422 if the provider says the account doesn't exist, or 409 if the names don't reasonably match - nothing is marked verified either way. Fails with 400 if no bank detail has been saved yet for this worker.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| No bank detail saved yet for this worker | `BUSINESS_RULE_VIOLATION` | 400 |\n| Provider says the account doesn't exist | `BUSINESS_RULE_VIOLATION` | 422 |\n| Bank's name-at-account doesn't match the declared holder name | `CONFLICT` | 409 |\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Verified (default stub provider always succeeds)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/bank-detail/verify",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "bank-detail", "verify"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Ramesh Kumar Sharma\",\n    \"bankName\": \"State Bank of India\",\n    \"accountNumber\": \"**********5678\",\n    \"ifscCode\": \"SBIN0001234\",\n    \"branchName\": \"Jaipur Civil Lines Branch\",\n    \"verified\": true,\n    \"verifiedAt\": \"2026-11-16T10:00:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - Bank's name-at-account does not match",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/bank-detail/verify",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "bank-detail", "verify"]
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"The bank's name on this account does not match the declared account holder name - please correct it and try again.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-16T10:00:00Z\",\n    \"traceId\": \"7e0f18293a4c5d6e\"\n  }\n}"
+            },
+            {
+              "name": "400 - No bank detail saved yet",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/bank-detail/verify",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "bank-detail", "verify"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"No bank details on file for this worker yet.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-16T10:00:00Z\",\n    \"traceId\": \"8f18293a4c5d6e7f\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Worker Statutory Detail",
+      "description": "**New 2026-11-16.** A worker's statutory identity numbers - UAN (EPFO) and ESIC. Same shape as the `kyc` module's Aadhaar/PAN: encrypted at rest, duplicate-checked across workers, masked on every read (e.g. `********2346`) unless the caller also holds `kyc.view_sensitive` - the same sensitivity gate as Aadhaar/PAN (UAN/ESIC are the same risk category - government identity numbers - unlike a bank account number, see **Worker Bank Detail** above, which has its own dedicated `workers.view_bank_details`). `GET` requires `workers.view` and returns `null`/`null` (not a 404) when neither has been saved yet. The two `PUT` endpoints require `workers.edit` and each submit ONE number independently - submitting a UAN does not touch any existing ESIC number and vice versa. Neither number has format validation (only a length cap) - UAN/ESIC formats aren't stable/guessable enough to safely check, same reasoning as Aadhaar's own format-free submission in **ATW-Worker-KYC**.",
+      "item": [
+        {
+          "name": "Get Worker Statutory Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail"]
+            },
+            "description": "**Permission:** `workers.view`.\n\nUAN and ESIC number, both masked (e.g. `********2346`) unless the caller also holds `kyc.view_sensitive`. When neither has been saved yet, both fields come back null - not a 404.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK (nothing saved yet)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uanNumber\": null,\n    \"esicNumber\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown worker id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/00000000-0000-4000-8000-000000000000/statutory-detail",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "00000000-0000-4000-8000-000000000000", "statutory-detail"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Worker not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-16T10:00:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Worker UAN",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail/uan",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail", "uan"]
+            },
+            "description": "**Permission:** `workers.edit`.\n\nRecords the Universal Account Number (EPFO) as declared - no format validation, only a length cap. Rejected with 409 if another worker already has this exact UAN on file.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Another worker already has this UAN | `CONFLICT` | 409 |\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uanNumber\": \"123456789012\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - UAN recorded (masked unless kyc.view_sensitive)",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail/uan",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail", "uan"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"uanNumber\": \"123456789012\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uanNumber\": \"********9012\",\n    \"esicNumber\": null\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - UAN already belongs to another worker",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail/uan",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail", "uan"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"uanNumber\": \"123456789012\"\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"This UAN is already registered to another worker.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-16T10:00:00Z\",\n    \"traceId\": \"5c6d7e0f18293a4c\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Worker ESIC Number",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail/esic",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail", "esic"]
+            },
+            "description": "**Permission:** `workers.edit`.\n\nRecords the ESIC number as declared - no format validation, only a length cap. Rejected with 409 if another worker already has this exact ESIC number on file.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Another worker already has this ESIC number | `CONFLICT` | 409 |\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"esicNumber\": \"1234567890123456\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - ESIC number recorded (masked unless kyc.view_sensitive)",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail/esic",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail", "esic"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"esicNumber\": \"1234567890123456\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uanNumber\": \"********9012\",\n    \"esicNumber\": \"************3456\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - ESIC number already belongs to another worker",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/{{workerId}}/statutory-detail/esic",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "workers", "{{workerId}}", "statutory-detail", "esic"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"esicNumber\": \"1234567890123456\"\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"This ESIC number is already registered to another worker.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-16T10:00:00Z\",\n    \"traceId\": \"6d7e0f18293a4c5d\"\n  }\n}"
             }
           ]
         }

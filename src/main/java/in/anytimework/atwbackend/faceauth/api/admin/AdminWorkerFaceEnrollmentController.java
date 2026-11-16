@@ -2,6 +2,7 @@ package in.anytimework.atwbackend.faceauth.api.admin;
 
 import in.anytimework.atwbackend.faceauth.application.FaceAuthService;
 import in.anytimework.atwbackend.faceauth.application.dto.FaceEnrollmentDto;
+import in.anytimework.atwbackend.faceauth.application.dto.FaceIdentificationResult;
 import in.anytimework.atwbackend.shared.api.ApiError;
 import in.anytimework.atwbackend.shared.api.ApiResponse;
 import in.anytimework.atwbackend.shared.api.ApiVersions;
@@ -20,6 +21,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -40,16 +42,18 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping(ApiVersions.V1 + "/admin")
-@Tag(name = "Worker - Face Enrollment", description = "Admin-triggered worker face-template enrollment for a "
-        + "future attendance face-match feature - the admin side only; self-service worker-portal enrollment "
-        + "and company-side attendance verification are legacy capabilities deliberately not carried over "
-        + "yet. A dedicated `faceauth` module, not part of `kyc`: whether a worker has a face template on "
-        + "file is an independent fact, with its own `faceauth.*` permissions separate from "
-        + "`workers.*`/`kyc.*`. Nested under `/admin/workers/{workerId}/face-enrollment` for API "
-        + "discoverability even though it's a different module's controller (same precedent as Worker KYC). "
-        + "The Worker module's own `GET /workers/{id}` already embeds this exact shape as its "
-        + "`faceEnrollment` field, and its list endpoint carries a lighter `faceEnrolledAt` timestamp - the "
-        + "endpoints here are for actually enrolling, re-enrolling, removing, or polling status on their own.")
+@Tag(name = "Worker - Face Enrollment", description = "Admin-triggered worker face-template enrollment, plus "
+        + "1:N identification (\"whose face is this\") - the admin side only; self-service worker-portal "
+        + "enrollment and company-side attendance verification are legacy capabilities deliberately not "
+        + "carried over yet. A dedicated `faceauth` module, not part of `kyc`: whether a worker has a face "
+        + "template on file is an independent fact, with its own `faceauth.*` permissions separate from "
+        + "`workers.*`/`kyc.*`. Enrollment endpoints are nested under `/admin/workers/{workerId}/face-enrollment` "
+        + "for API discoverability even though it's a different module's controller (same precedent as Worker "
+        + "KYC); Identify has no `workerId` to nest under (that's the point) and lives at a plain "
+        + "`/admin/face-identify`. The Worker module's own `GET /workers/{id}` already embeds the enrollment "
+        + "shape as its `faceEnrollment` field, and its list endpoint carries a lighter `faceEnrolledAt` "
+        + "timestamp - the endpoints here are for actually enrolling, re-enrolling, removing, polling status, "
+        + "or identifying.")
 public class AdminWorkerFaceEnrollmentController {
 
     private final FaceAuthService faceAuthService;
@@ -177,6 +181,47 @@ public class AdminWorkerFaceEnrollmentController {
             @Parameter(description = "Worker id.", required = true) @PathVariable UUID workerId) {
         faceAuthService.removeEnrollment(workerId);
         return ApiResponse.ok();
+    }
+
+    @PostMapping(value = "/face-identify", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("@authz.has('faceauth.identify')")
+    @Operation(summary = "Identify which worker a face photo belongs to", description = """
+            Permission: `faceauth.identify` - separate from `faceauth.view`/`faceauth.enroll`, since \
+            this is a materially different and more sensitive capability (searching across every \
+            enrolled worker, not acting on one already-known worker).
+
+            **1:N identification, not 1:1 verification** - there is no `workerId` in this request; the \
+            point is finding out who the photo belongs to. Compares the uploaded photo against every \
+            currently-enrolled worker (not scoped to a company/team - there is no such actor in this \
+            codebase yet) and returns the best match, if any.
+
+            `matched=false` is a normal, successful response, not an error - it means either nothing \
+            scored above the configured threshold, or the top two candidates were too close together \
+            to confidently tell apart (see `ambiguous`). `topMatches` (up to 5) is always included for \
+            review even when nothing matched.
+
+            Same quality/liveness checks as Enroll apply to the uploaded photo itself (422 if it fails \
+            either) - this never compares a poor-quality or non-live photo.""")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Comparison completed (see matched/ambiguous for the actual outcome - this is 200 either way).",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = FaceIdentificationResult.class), examples = {
+                            @ExampleObject(name = "confident-match", value = """
+                                    { "success": true, "data": { "matched": true, "workerId": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "bestScore": 0.87, "ambiguous": false, "topMatches": [ { "workerId": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "score": 0.87 }, { "workerId": "99999999-9999-4999-8999-999999999999", "score": 0.41 } ] }, "error": null }"""),
+                            @ExampleObject(name = "no-confident-match", value = """
+                                    { "success": true, "data": { "matched": false, "workerId": null, "bestScore": 0.33, "ambiguous": false, "topMatches": [ { "workerId": "99999999-9999-4999-8999-999999999999", "score": 0.33 } ] }, "error": null }""")
+                    })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "Nobody is enrolled yet, or the uploaded photo itself failed quality/liveness - see message.",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = {
+                            @ExampleObject(name = "nobody-enrolled", value = """
+                                    { "success": false, "data": null, "error": { "code": "BUSINESS_RULE_VIOLATION", "message": "There is no one enrolled yet to compare against.", "fieldErrors": null, "timestamp": "2026-11-16T06:40:00Z", "traceId": "a1b2c3d4e5f60718" } }"""),
+                            @ExampleObject(name = "liveness-failed", value = """
+                                    { "success": false, "data": null, "error": { "code": "BUSINESS_RULE_VIOLATION", "message": "Liveness check failed - please retake the photo in person.", "fieldErrors": null, "timestamp": "2026-11-16T06:40:00Z", "traceId": "a1b2c3d4e5f60718" } }""")
+                    }))
+    })
+    public ApiResponse<FaceIdentificationResult> identify(
+            @Parameter(description = "Probe photo to identify. PNG, JPEG, or WEBP.", required = true)
+            @RequestParam("file") MultipartFile file) {
+        return ApiResponse.ok(faceAuthService.identify(readBytes(file), file.getContentType()));
     }
 
     private static byte[] readBytes(MultipartFile file) {

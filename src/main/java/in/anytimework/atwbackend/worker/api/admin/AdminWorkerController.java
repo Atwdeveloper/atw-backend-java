@@ -23,12 +23,16 @@ import in.anytimework.atwbackend.worker.api.admin.dto.WorkerExportRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerNoteResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerStatusHistoryResponse;
+import in.anytimework.atwbackend.worker.api.admin.dto.WorkerStatutoryDetailResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerSummaryResponse;
+import in.anytimework.atwbackend.worker.api.admin.dto.SubmitWorkerEsicRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.SubmitWorkerUanRequest;
 import in.anytimework.atwbackend.worker.application.WorkerAddressService;
 import in.anytimework.atwbackend.worker.application.WorkerBankDetailService;
 import in.anytimework.atwbackend.worker.application.WorkerNoteService;
 import in.anytimework.atwbackend.worker.application.WorkerSearchCriteria;
 import in.anytimework.atwbackend.worker.application.WorkerService;
+import in.anytimework.atwbackend.worker.application.WorkerStatutoryDetailService;
 import in.anytimework.atwbackend.worker.domain.AddressType;
 import in.anytimework.atwbackend.worker.domain.WorkerStatus;
 import io.swagger.v3.oas.annotations.Operation;
@@ -41,6 +45,7 @@ import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -57,6 +62,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.time.LocalDate;
 import java.util.Set;
 import java.util.UUID;
 
@@ -64,7 +70,7 @@ import java.util.UUID;
  * Worker CRUD, designation/skill assignment, status lifecycle, bulk status/delete, CSV export, and
  * the address/bank-detail/notes sub-resources. Every endpoint requires the matching {@code workers.*}
  * permission; bank-detail reads are additionally masked unless the caller also holds
- * {@code kyc.view_sensitive} (see {@code WorkerBankDetailService}). Worker KYC itself lives under
+ * {@code workers.view_bank_details} (see {@code WorkerBankDetailService}). Worker KYC itself lives under
  * {@code kyc.api.admin} - see {@code AdminWorkerKycController} - nested at the same
  * {@code /workers/{id}/kyc} path for API discoverability even though it's a different module's
  * controller.
@@ -83,13 +89,16 @@ public class AdminWorkerController {
     private final WorkerService workerService;
     private final WorkerAddressService addressService;
     private final WorkerBankDetailService bankDetailService;
+    private final WorkerStatutoryDetailService statutoryDetailService;
     private final WorkerNoteService noteService;
 
     public AdminWorkerController(WorkerService workerService, WorkerAddressService addressService,
-                                 WorkerBankDetailService bankDetailService, WorkerNoteService noteService) {
+                                 WorkerBankDetailService bankDetailService,
+                                 WorkerStatutoryDetailService statutoryDetailService, WorkerNoteService noteService) {
         this.workerService = workerService;
         this.addressService = addressService;
         this.bankDetailService = bankDetailService;
+        this.statutoryDetailService = statutoryDetailService;
         this.noteService = noteService;
     }
 
@@ -416,6 +425,34 @@ public class AdminWorkerController {
             }
             """;
 
+    private static final String EX_ERROR_CONFLICT_UAN = """
+            {
+              "success": false,
+              "data": null,
+              "error": {
+                "code": "CONFLICT",
+                "message": "This UAN is already registered to another worker.",
+                "fieldErrors": null,
+                "timestamp": "2026-11-16T10:00:00Z",
+                "traceId": "5c6d7e0f18293a4c"
+              }
+            }
+            """;
+
+    private static final String EX_ERROR_CONFLICT_ESIC = """
+            {
+              "success": false,
+              "data": null,
+              "error": {
+                "code": "CONFLICT",
+                "message": "This ESIC number is already registered to another worker.",
+                "fieldErrors": null,
+                "timestamp": "2026-11-16T10:01:00Z",
+                "traceId": "6d7e0f18293a4c5d"
+              }
+            }
+            """;
+
     private static final String EX_ERROR_VALIDATION_STATUS_RULE = """
             {
               "success": false,
@@ -540,7 +577,9 @@ public class AdminWorkerController {
             own values (an OR within that filter), and every non-empty filter is ANDed together with the \
             others. `kycStatus` is resolved from the separate `kyc` module, not a column on this table - \
             filtering by it costs one extra lookup query. `search` matches first/last name, mobile \
-            number, worker code, and email.
+            number, worker code, and email. `registeredFrom`/`registeredTo` filter on the worker's \
+            registration (creation) date - there is no separate "registration date" field; it's the \
+            same value as `createdAt` below, just filterable as whole UTC calendar days.
 
             **Pagination/sort:** standard Spring pagination (`page`, `size`, `sort`). Default \
             `page-size`/`max-page-size` are controlled centrally by \
@@ -557,6 +596,8 @@ public class AdminWorkerController {
     @Parameter(name = "skillId", description = "Filter by one or more skill ids.")
     @Parameter(name = "kycStatus", description = "Filter by one or more KYC statuses, resolved from the separate kyc module.")
     @Parameter(name = "search", description = "Free-text match against first/last name, mobile number, worker code, and email.", example = "sharma")
+    @Parameter(name = "registeredFrom", description = "Registered (created) on or after this date (UTC).", example = "2026-01-01")
+    @Parameter(name = "registeredTo", description = "Registered (created) on or before this date (UTC).", example = "2026-12-31")
     @Parameter(name = "sort", description = "Allowed values: firstName, lastName, workerCode, mobileNumber, status, createdAt. Default: createdAt,desc.", example = "createdAt,desc")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Page of workers.",
             content = @Content(schema = @Schema(implementation = WorkerSummaryResponse.class),
@@ -573,9 +614,11 @@ public class AdminWorkerController {
             @RequestParam(required = false) Set<UUID> skillId,
             @RequestParam(required = false) Set<KycStatus> kycStatus,
             @RequestParam(required = false) String search,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate registeredFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate registeredTo,
             @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         WorkerSearchCriteria criteria = new WorkerSearchCriteria(
-                status, departmentId, industryId, designationId, skillId, kycStatus, search);
+                status, departmentId, industryId, designationId, skillId, kycStatus, search, registeredFrom, registeredTo);
         return ApiResponse.ok(workerService.list(criteria, pageable));
     }
 
@@ -797,7 +840,8 @@ public class AdminWorkerController {
     @PreAuthorize("@authz.has('workers.export')")
     public ResponseEntity<byte[]> export(@RequestBody WorkerExportRequest request) {
         WorkerSearchCriteria criteria = new WorkerSearchCriteria(request.status(), request.departmentId(),
-                request.industryId(), request.designationId(), request.skillId(), request.kycStatus(), request.search());
+                request.industryId(), request.designationId(), request.skillId(), request.kycStatus(), request.search(),
+                request.registeredFrom(), request.registeredTo());
         byte[] csv = workerService.exportToCsv(request.ids(), criteria);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/csv"))
@@ -976,11 +1020,11 @@ public class AdminWorkerController {
             **Permission:** `workers.view`.
 
             `accountNumber` is **masked** (e.g. `**********5678`) unless the caller also holds \
-            `kyc.view_sensitive` - the same sensitivity gate used for the Aadhaar/PAN numbers in the kyc \
-            module, since a bank account number is comparably identifying. When no bank detail has been \
-            saved yet, every field comes back null/false - not a 404.""")
+            `workers.view_bank_details` - a dedicated unmask permission, independent of the kyc \
+            module's `kyc.view_sensitive` (which only covers Aadhaar/PAN/UAN/ESIC). When no bank detail \
+            has been saved yet, every field comes back null/false - not a 404.""")
     @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "The bank detail (masked unless kyc.view_sensitive).",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "The bank detail (masked unless workers.view_bank_details).",
             content = @Content(schema = @Schema(implementation = WorkerBankDetailResponse.class),
                     examples = @ExampleObject(value = EX_BANK_DETAIL)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown worker id.",
@@ -996,9 +1040,10 @@ public class AdminWorkerController {
 
             Full replace of the bank detail row - every field is optional, captured progressively. \
             `accountNumber` is stored encrypted at rest and is masked back on every read (including this \
-            call's own response) unless the caller holds `kyc.view_sensitive`.""")
+            call's own response) unless the caller holds `workers.view_bank_details`. Saving new details \
+            always clears any prior verification - re-run verify after any edit.""")
     @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Updated bank detail (masked unless kyc.view_sensitive).",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Updated bank detail (masked unless workers.view_bank_details).",
             content = @Content(schema = @Schema(implementation = WorkerBankDetailResponse.class),
                     examples = @ExampleObject(value = EX_BANK_DETAIL)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown worker id.",
@@ -1008,6 +1053,82 @@ public class AdminWorkerController {
     public ApiResponse<WorkerBankDetailResponse> updateBankDetail(@PathVariable UUID id,
                                                                   @Valid @RequestBody UpdateWorkerBankDetailRequest request) {
         return ApiResponse.ok(bankDetailService.update(id, request));
+    }
+
+    @Operation(summary = "Verify a worker's bank detail", description = """
+            **Permission:** `workers.edit`.
+
+            Calls the configured bank-verification provider (off by default - see \
+            `atw.bank-verification.provider`) with the account number/IFSC already on file, and checks \
+            the bank's own name-at-account against the declared account holder name. On success, sets \
+            `verified=true`/`verifiedAt` (never settable directly by the client - this is the only way \
+            those fields change). Fails with a 422 if the provider says the account doesn't exist, or \
+            if the names don't reasonably match (case/whitespace-insensitive) - nothing is marked \
+            verified in either case. Fails with a 400 if no bank detail has been saved yet.""")
+    @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Verified bank detail (masked unless workers.view_bank_details).",
+            content = @Content(schema = @Schema(implementation = WorkerBankDetailResponse.class),
+                    examples = @ExampleObject(value = EX_BANK_DETAIL)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown worker id.",
+            content = @Content(examples = @ExampleObject(value = EX_ERROR_NOT_FOUND)))
+    @PostMapping("/{id}/bank-detail/verify")
+    @PreAuthorize("@authz.has('workers.edit')")
+    public ApiResponse<WorkerBankDetailResponse> verifyBankDetail(@PathVariable UUID id) {
+        return ApiResponse.ok(bankDetailService.verify(id));
+    }
+
+    @Operation(summary = "Get a worker's statutory detail", description = """
+            **Permission:** `workers.view`.
+
+            UAN (EPFO) and ESIC number - both masked (e.g. `********2346`) unless the caller also \
+            holds `kyc.view_sensitive` (the same sensitivity gate as the kyc module's Aadhaar/PAN - \
+            these are the same risk category). When neither has been saved yet, both fields come back \
+            null - not a 404.""")
+    @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "The statutory detail (masked unless kyc.view_sensitive).",
+            content = @Content(schema = @Schema(implementation = WorkerStatutoryDetailResponse.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown worker id.",
+            content = @Content(examples = @ExampleObject(value = EX_ERROR_NOT_FOUND)))
+    @GetMapping("/{id}/statutory-detail")
+    @PreAuthorize("@authz.has('workers.view')")
+    public ApiResponse<WorkerStatutoryDetailResponse> getStatutoryDetail(@PathVariable UUID id) {
+        return ApiResponse.ok(statutoryDetailService.get(id));
+    }
+
+    @Operation(summary = "Submit a worker's UAN", description = """
+            **Permission:** `workers.edit`.
+
+            Records the Universal Account Number (EPFO) as declared - no format validation, only a \
+            length cap (UAN's format isn't stable/guessable enough to safely check, matching Aadhaar's \
+            own precedent). Rejected with 409 if another worker already has this exact UAN on file.""")
+    @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "UAN recorded.",
+            content = @Content(schema = @Schema(implementation = WorkerStatutoryDetailResponse.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "This UAN already belongs to a different worker.",
+            content = @Content(examples = @ExampleObject(value = EX_ERROR_CONFLICT_UAN)))
+    @PutMapping("/{id}/statutory-detail/uan")
+    @PreAuthorize("@authz.has('workers.edit')")
+    public ApiResponse<WorkerStatutoryDetailResponse> submitUan(@PathVariable UUID id,
+                                                                @Valid @RequestBody SubmitWorkerUanRequest request) {
+        return ApiResponse.ok(statutoryDetailService.updateUan(id, request.uanNumber()));
+    }
+
+    @Operation(summary = "Submit a worker's ESIC number", description = """
+            **Permission:** `workers.edit`.
+
+            Records the ESIC number as declared - no format validation, only a length cap (ESIC number \
+            formats vary by registration era/scheme, not stable enough to safely guess a single \
+            pattern). Rejected with 409 if another worker already has this exact ESIC number on file.""")
+    @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "ESIC number recorded.",
+            content = @Content(schema = @Schema(implementation = WorkerStatutoryDetailResponse.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "This ESIC number already belongs to a different worker.",
+            content = @Content(examples = @ExampleObject(value = EX_ERROR_CONFLICT_ESIC)))
+    @PutMapping("/{id}/statutory-detail/esic")
+    @PreAuthorize("@authz.has('workers.edit')")
+    public ApiResponse<WorkerStatutoryDetailResponse> submitEsic(@PathVariable UUID id,
+                                                                 @Valid @RequestBody SubmitWorkerEsicRequest request) {
+        return ApiResponse.ok(statutoryDetailService.updateEsic(id, request.esicNumber()));
     }
 
     @Operation(summary = "List a worker's notes", description = """

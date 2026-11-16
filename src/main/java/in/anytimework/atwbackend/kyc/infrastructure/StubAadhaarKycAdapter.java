@@ -39,6 +39,7 @@ public class StubAadhaarKycAdapter implements AadhaarKycPort {
         }
         return new AadhaarVerifiedDetails(
                 "Stub Verified Worker",
+                "S/O: Stub Father Name",
                 "MALE",
                 LocalDate.of(1995, 1, 1),
                 "123 Stub Street",

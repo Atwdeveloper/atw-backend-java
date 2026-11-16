@@ -123,6 +123,35 @@ class SandboxAadhaarKycAdapterTest {
     }
 
     @Test
+    void verifyOtp_passesThroughCareOfAsFatherNameExactlyAsReturned() {
+        expectAuthentication();
+        server.expect(requestTo("http://sandbox.test/kyc/aadhaar/okyc/otp/verify"))
+                .andRespond(withSuccess("""
+                        {"data":{"name":"Ramesh Kumar","care_of":"S/O: Suresh Kumar","gender":"M",
+                         "date_of_birth":"15-08-1995","status":"VALID","full_address":"addr","address":{}}}
+                        """, MediaType.APPLICATION_JSON));
+
+        AadhaarVerifiedDetails details = adapter.verifyOtp("ref-456", "123456");
+
+        // Not stripped of its "S/O:" prefix - see AadhaarVerifiedDetails' Javadoc for why.
+        assertThat(details.fatherName()).isEqualTo("S/O: Suresh Kumar");
+    }
+
+    @Test
+    void verifyOtp_whenCareOfIsAbsent_fatherNameIsNull() {
+        expectAuthentication();
+        server.expect(requestTo("http://sandbox.test/kyc/aadhaar/okyc/otp/verify"))
+                .andRespond(withSuccess("""
+                        {"data":{"name":"Ramesh Kumar","gender":"M","date_of_birth":"15-08-1995",
+                         "status":"VALID","full_address":"addr","address":{}}}
+                        """, MediaType.APPLICATION_JSON));
+
+        AadhaarVerifiedDetails details = adapter.verifyOtp("ref-456", "123456");
+
+        assertThat(details.fatherName()).isNull();
+    }
+
+    @Test
     void verifyOtp_whenDateOfBirthIsIsoFormat_fallsBackSuccessfully() {
         expectAuthentication();
         server.expect(requestTo("http://sandbox.test/kyc/aadhaar/okyc/otp/verify"))

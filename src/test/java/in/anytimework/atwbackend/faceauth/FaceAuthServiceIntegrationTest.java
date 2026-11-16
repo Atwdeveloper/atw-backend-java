@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.faceauth;
 import in.anytimework.atwbackend.document.FileStorageTestConfig;
 import in.anytimework.atwbackend.faceauth.application.FaceAuthService;
 import in.anytimework.atwbackend.faceauth.application.dto.FaceEnrollmentDto;
+import in.anytimework.atwbackend.faceauth.application.dto.FaceIdentificationResult;
 import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollment;
 import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollmentRepository;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
@@ -73,8 +74,8 @@ class FaceAuthServiceIntegrationTest {
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
         DesignationResponse designation = designationService.create(
                 new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
-        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(),
-                Gender.MALE, null, uniqueMobile(), null, department.id(), null,
+        WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null,
+                Gender.MALE, null, uniqueMobile(), null, department.id(), null, null,
                 Set.of(designation.id()), designation.id(), Set.of()));
         return worker.id();
     }
@@ -169,5 +170,28 @@ class FaceAuthServiceIntegrationTest {
         UUID workerId = createWorker();
 
         assertThatCode(() -> faceAuthService.removeEnrollment(workerId)).doesNotThrowAnyException();
+    }
+
+    /**
+     * {@code identify}'s threshold/ambiguity decision logic, and its "nobody enrolled yet" guard, need
+     * a controlled/empty candidate set to verify deterministically - see
+     * {@code FaceAuthServiceIdentifyTest} for both (this class's own local Postgres accumulates
+     * enrollments across every test in this class, and across the whole suite, so neither "the table
+     * is empty" nor "there is exactly one candidate" can be asserted here - same accumulating-database
+     * caveat this codebase's other integration tests already call out). This only proves the
+     * end-to-end wiring still works: enrolling, then identifying, runs without error and returns a
+     * well-formed result that actually includes the worker just enrolled somewhere in its ranking.
+     */
+    @Test
+    void identify_afterEnrollingSomeone_returnsAResultWithoutThrowing() {
+        UUID workerId = createWorker();
+        faceAuthService.enroll(workerId, "face.jpg", "image/jpeg", FAKE_JPEG_BYTES, true, "127.0.0.1");
+
+        FaceIdentificationResult result = faceAuthService.identify(FAKE_JPEG_BYTES, "image/jpeg");
+
+        // The stub's embeddings are random on every call, so a confident match can't be asserted here -
+        // only that the comparison ran end-to-end and returned a well-formed result either way.
+        assertThat(result.topMatches()).isNotEmpty();
+        assertThat(result.bestScore()).isBetween(-1.0, 1.0);
     }
 }

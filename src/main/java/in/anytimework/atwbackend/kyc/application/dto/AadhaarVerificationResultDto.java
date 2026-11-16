@@ -26,6 +26,12 @@ public record AadhaarVerificationResultDto(
         @Schema(description = "UIDAI-verified full name, exactly as returned by the provider.", example = "Ramesh Kumar")
         String fullName,
 
+        @Schema(description = "Provider's raw \"care of\" value, exactly as returned - often prefixed (e.g. "
+                + "\"S/O: Suresh Kumar\", or \"D/O\"/\"W/O\"), NOT stripped to a bare name here since there is no "
+                + "single safe pattern for every prefix variant. Review/clean up before submitting if needed. "
+                + "Null if the provider didn't return one.", example = "S/O: Suresh Kumar", nullable = true)
+        String fatherName,
+
         @Schema(description = "Provider free text, NOT a validated/fixed enum at this layer (e.g. \"MALE\", "
                 + "\"FEMALE\", \"TRANSGENDER\" from UIDAI) - map/display it client-side as needed.",
                 example = "MALE")

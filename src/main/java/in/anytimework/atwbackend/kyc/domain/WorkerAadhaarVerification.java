@@ -72,6 +72,10 @@ public class WorkerAadhaarVerification extends BaseEntity {
     @Column(name = "verified_full_name", length = 255)
     private String verifiedFullName;
 
+    /** Raw "care of" value from the provider, as-is - see AadhaarVerifiedDetails' Javadoc for why this is never parsed/stripped. */
+    @Column(name = "verified_father_name", length = 255)
+    private String verifiedFatherName;
+
     @Column(name = "verified_gender", length = 20)
     private String verifiedGender;
 
@@ -130,12 +134,13 @@ public class WorkerAadhaarVerification extends BaseEntity {
         this.status = AadhaarVerificationStatus.FAILED;
     }
 
-    public void markVerified(Instant now, String fullName, String gender, LocalDate dateOfBirth,
+    public void markVerified(Instant now, String fullName, String fatherName, String gender, LocalDate dateOfBirth,
                              String addressLine1, String addressLine2, String pincode,
                              String stateName, String districtName, UUID photoDocumentId) {
         this.status = AadhaarVerificationStatus.VERIFIED;
         this.verifiedAt = now;
         this.verifiedFullName = fullName;
+        this.verifiedFatherName = fatherName;
         this.verifiedGender = gender;
         this.verifiedDateOfBirth = dateOfBirth;
         this.verifiedAddressLine1 = addressLine1;

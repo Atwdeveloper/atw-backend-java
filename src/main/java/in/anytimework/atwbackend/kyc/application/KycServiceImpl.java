@@ -9,6 +9,7 @@ import in.anytimework.atwbackend.kyc.domain.WorkerKycProfileRepository;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
+import in.anytimework.atwbackend.shared.security.IdentityNumberHasher;
 import in.anytimework.atwbackend.shared.security.PermissionChecker;
 import in.anytimework.atwbackend.shared.security.PiiMasking;
 import org.springframework.context.ApplicationEventPublisher;

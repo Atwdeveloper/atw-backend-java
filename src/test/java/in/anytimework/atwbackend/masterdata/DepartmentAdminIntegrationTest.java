@@ -60,8 +60,8 @@ class DepartmentAdminIntegrationTest {
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
         DesignationResponse designation = designationService.create(
                 new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
-        workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), Gender.MALE, null,
-                uniqueMobile(), null, departmentId, null, Set.of(designation.id()), designation.id(), Set.of()));
+        workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE, null,
+                uniqueMobile(), null, departmentId, null, null, Set.of(designation.id()), designation.id(), Set.of()));
     }
 
     @Test

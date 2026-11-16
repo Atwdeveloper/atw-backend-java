@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "ATW Backend — Worker Face Enrollment",
-    "description": "# ATW Backend — Worker Face Enrollment\n\nAdmin-triggered enrollment of a worker's face template for a future attendance face-match feature - a\ndedicated `faceauth` module, not part of `kyc`. Whether a worker has a face template on file is an\nindependent fact, with its own `faceauth.*` permissions separate from `workers.*`/`kyc.*`. Nested under\n`/admin/workers/{workerId}/face-enrollment` for API discoverability even though it's served by a\ndifferent module's controller (same precedent as Worker KYC).\n\n**Run order:** every request here only needs an existing `{{workerId}}` - there is no create-order\ndependency between the three requests themselves, and this collection never creates a worker. Get one\nfrom the Worker collection (written concurrently alongside this one) and set it as an environment\nvariable first. A sensible manual run: **Get Face Enrollment** (see the not-enrolled placeholder) →\n**Enroll / Re-enroll Worker Face** → **Get Face Enrollment** again (now enrolled) → **Remove Face\nEnrollment** → **Get Face Enrollment** once more (back to the placeholder).\n\n**Shared conventions across every request in this folder:**\n- `GET` never 404s - a worker who hasn't enrolled gets a placeholder body (`enrolled: false`, every\n  other field `null`) back, not an error. There is no separate \"has this worker enrolled\" endpoint;\n  `data.enrolled` on the `GET` response is the only way to ask that through this API.\n- `PUT` is both enroll *and* re-enroll - re-enrolling fully **overwrites** the previous template, with\n  no history of past enrollments kept, only ever the current one.\n- `DELETE` is a \"make sure nothing is enrolled\" operation, not \"delete this specific enrollment\" - it is\n  **not** an error if the worker had nothing enrolled to begin with.\n- Locally and in tests, `atw.face-auth.provider` is unset and defaults to a stub adapter that accepts\n  any photo as good-quality and live. The 422 quality/liveness failure examples below can only actually\n  be exercised against a real `atw.face-auth.provider=python` deployment of the separate face-auth\n  service.\n- The Worker module's own `GET /workers/{id}` already embeds this exact enrollment shape as its\n  `faceEnrollment` field, and its list endpoint carries a lighter `faceEnrolledAt` timestamp - most\n  front-end screens won't need **Get Face Enrollment** below at all except around the enroll/re-enroll/\n  remove actions themselves.\n\nFor admin login/2FA, see **ATW-Auth-Account.postman_collection.json**; for staff/role administration,\nsee **ATW-RBAC-Staff.postman_collection.json**; for reference/lookup data, see\n**ATW-Masterdata.postman_collection.json** (also this collection's style template).\n\nEvery endpoint is versioned under `/api/v1/` and returns the same envelope:\n\n```\n{ \"success\": boolean, \"data\": <payload> | null, \"error\": <ApiError> | null }\n```\n\n`ApiError` shape: `{\"code\": string, \"message\": string, \"fieldErrors\": [{\"field\",\"message\"}] | null, \"timestamp\": ISO-8601 string, \"traceId\": string | null}`. `fieldErrors` is populated only for `VALIDATION_ERROR` responses that came from `@Valid` request-body validation; it's `null`/omitted for every other error, including other `VALIDATION_ERROR` responses raised programmatically (e.g. \"Unknown permission code(s)\"). `traceId` echoes the `X-Correlation-Id` request header when present — include it when reporting a bug.\n\n## Running this collection\n\nSelect the **ATW Backend - Local** environment first, and run **Login** / **Verify OTP** from the\nAuth & Account collection to populate `{{accessToken}}` — every request here requires it, plus the\nmatching `faceauth.*` permission. Then set `{{workerId}}` to a real worker id (create one via the\nWorker collection, or paste in an existing one) - nothing below creates a worker itself.\n\n1. **Get Face Enrollment** has no dependency on the other two - safe to run first against any\n   `{{workerId}}`.\n2. **Enroll / Re-enroll Worker Face** needs an actual image file attached to its `file` form-data part\n   (Postman can't supply one for you - pick any small PNG/JPEG/WEBP under 2MB) and `consentGiven` left\n   at `true`.\n3. **Remove Face Enrollment** depends on nothing - it succeeds whether or not step 2 ran.\n\n## Error codes that can appear on (almost) any endpoint\n\nThese are produced centrally — by `GlobalExceptionHandler`, by Spring Security's entry point / access-denied handler, or by the two security filters that run before a controller is even reached — so they are **not** re-documented on every individual request below; only an endpoint's *specific* codes and triggers are. Two pairs are easy to confuse and worth reading carefully:\n\n| Code | HTTP | Meaning |\n|---|---|---|\n| `VALIDATION_ERROR` | 400 | A `@Valid` request-body field failed Bean Validation (`fieldErrors[]` present), or a service-level input check failed (no `fieldErrors`). |\n| `MALFORMED_REQUEST` | 400 | Request body is missing or isn't valid JSON. |\n| `UNSUPPORTED_MEDIA_TYPE` | 415 | `Content-Type` isn't `application/json`. |\n| `UNAUTHENTICATED` | 401 | **No bearer token was presented at all**, or it's malformed/expired/signature-invalid. Produced by Spring Security itself, before any controller runs. |\n| `UNAUTHORIZED` | 401 | A **business-level** auth failure on an endpoint that doesn't require a token in the first place — bad login credentials, a locked/disabled account, an invalid refresh/reset/invite token. Same HTTP status as `UNAUTHENTICATED` above, different meaning: this means \"the token/credential you supplied is bad\", not \"you supplied nothing\". |\n| `SESSION_REVOKED` | 401 | The bearer token parses fine, but the admin's `security_version` has moved on since it was issued (password changed/reset, or their role assignment changed), or the account is no longer `ACTIVE`. The client must discard tokens and log in again — refreshing won't help, the refresh token was revoked too. |\n| `MUST_CHANGE_PASSWORD` | 403 | Authenticated, but the token's `mustChangePassword` flag is set and this isn't `/admin/account/me` or `/admin/account/change-password`. |\n| `ACCESS_DENIED` | 403 | Authenticated, but lacking the specific permission the endpoint requires. |\n| `RATE_LIMITED` | 429 | Too many requests to one of the 6 public, abuse-prone auth endpoints from the same IP within the window — default 10 requests/60s, **per endpoint**, not pooled across them. |\n| `NOT_FOUND` | 404 | The **URL itself** doesn't match any endpoint (a routing miss — typo'd path, wrong version prefix, etc). |\n| `RESOURCE_NOT_FOUND` | 404 | The URL is valid, but the specific id in it (a staff id, role id, ...) doesn't exist. Different from `NOT_FOUND` above — don't conflate \"no such route\" with \"no such record\". |\n| `METHOD_NOT_ALLOWED` | 405 | Right URL, wrong HTTP verb. |\n| `BUSINESS_RULE_VIOLATION` | 422 | Input is syntactically well-formed but violates a business rule (e.g. \"system roles cannot be modified\", a privilege-escalation attempt, self/super-admin protection). |\n| `CONFLICT` | 409 | Either an endpoint's own duplicate check (most common — a friendlier, specific message), or a generic last-resort safety net when a unique-constraint violation reaches the database despite an earlier application-level check passing (a genuine race between two concurrent requests) — that fallback case always carries the same generic message, regardless of which field collided. |\n| `INTERNAL_ERROR` | 500 | Unexpected failure. Full detail (stack trace) is logged server-side against the same `traceId` returned to the client; never returned in the response body itself. |\n\n**Specific to this module:** `RESOURCE_NOT_FOUND` above does **not** apply to any endpoint in this\ncollection. `GET` returns a not-enrolled placeholder instead of 404 for any `workerId` at all (real or\nnot - confirmed against `FaceAuthServiceImpl.getEnrollment`, which never checks the `worker` table).\nNeither `PUT` nor `DELETE` checks worker existence either; a `PUT` against a `workerId` that doesn't\nactually exist as a worker would instead fail with a generic `CONFLICT`/409 from the underlying\nforeign-key constraint - an edge case a normal UI flow should never hit, since `workerId` always comes\nfrom an already-loaded worker page.\n\n## Documentation cross-references\n\n- **ATW-Auth-Account.postman_collection.json** — login/2FA and a caller's own account self-service.\n- **ATW-RBAC-Staff.postman_collection.json** — role/permission management and staff administration.\n- **ATW-Masterdata.postman_collection.json** — departments/industries/designations/skills/minimum-wage\n  reference data, and this collection's style template.\n- `FRONTEND_HANDOVER.md` / `HANDOVER.md` — broader project handover context.\n- The **Worker** and **Worker KYC** admin APIs (collections written concurrently alongside this one)\n  own the `workerId` this whole module keys off of, and surface this module's data without a separate\n  call via `WorkerResponse.faceEnrollment` / `WorkerSummaryResponse.faceEnrolledAt`.",
+    "description": "# ATW Backend — Worker Face Enrollment\n\nAdmin-triggered enrollment of a worker's face template for a future attendance face-match feature - a\ndedicated `faceauth` module, not part of `kyc`. Whether a worker has a face template on file is an\nindependent fact, with its own `faceauth.*` permissions separate from `workers.*`/`kyc.*`. Nested under\n`/admin/workers/{workerId}/face-enrollment` for API discoverability even though it's served by a\ndifferent module's controller (same precedent as Worker KYC).\n\n**New 2026-11-16: Worker - Face Identification folder.** 1:N identification (\"whose face is this\") -\na materially different capability from enrollment, gated by its own `faceauth.identify` permission\n(separate from `faceauth.view`/`faceauth.enroll`). There is no `workerId` in this request - that's the\npoint - so it is NOT nested under `/workers/{workerId}/...` like every enrollment endpoint; it lives at\na plain `/admin/face-identify`. See that folder's own description below for the full threshold/\nambiguity decision logic.\n\n**Run order:** every request in **Worker - Face Enrollment** only needs an existing `{{workerId}}` -\nthere is no create-order dependency between the three requests themselves, and this collection never\ncreates a worker. Get one from the Worker collection (written concurrently alongside this one) and set\nit as an environment variable first. A sensible manual run: **Get Face Enrollment** (see the\nnot-enrolled placeholder) → **Enroll / Re-enroll Worker Face** → **Get Face Enrollment** again (now\nenrolled) → **Remove Face Enrollment** → **Get Face Enrollment** once more (back to the placeholder).\n**Identify Face** (new folder) is independent of this run order - it needs at least one worker enrolled\nsomewhere in the system (not necessarily `{{workerId}}` itself), not a fresh enrollment each time.\n\n**Shared conventions across every request in this folder:**\n- `GET` never 404s - a worker who hasn't enrolled gets a placeholder body (`enrolled: false`, every\n  other field `null`) back, not an error. There is no separate \"has this worker enrolled\" endpoint;\n  `data.enrolled` on the `GET` response is the only way to ask that through this API.\n- `PUT` is both enroll *and* re-enroll - re-enrolling fully **overwrites** the previous template, with\n  no history of past enrollments kept, only ever the current one.\n- `DELETE` is a \"make sure nothing is enrolled\" operation, not \"delete this specific enrollment\" - it is\n  **not** an error if the worker had nothing enrolled to begin with.\n- Locally and in tests, `atw.face-auth.provider` is unset and defaults to a stub adapter that accepts\n  any photo as good-quality and live. The 422 quality/liveness failure examples below can only actually\n  be exercised against a real `atw.face-auth.provider=python` deployment of the separate face-auth\n  service.\n- The Worker module's own `GET /workers/{id}` already embeds this exact enrollment shape as its\n  `faceEnrollment` field, and its list endpoint carries a lighter `faceEnrolledAt` timestamp - most\n  front-end screens won't need **Get Face Enrollment** below at all except around the enroll/re-enroll/\n  remove actions themselves.\n\nFor admin login/2FA, see **ATW-Auth-Account.postman_collection.json**; for staff/role administration,\nsee **ATW-RBAC-Staff.postman_collection.json**; for reference/lookup data, see\n**ATW-Masterdata.postman_collection.json** (also this collection's style template).\n\nEvery endpoint is versioned under `/api/v1/` and returns the same envelope:\n\n```\n{ \"success\": boolean, \"data\": <payload> | null, \"error\": <ApiError> | null }\n```\n\n`ApiError` shape: `{\"code\": string, \"message\": string, \"fieldErrors\": [{\"field\",\"message\"}] | null, \"timestamp\": ISO-8601 string, \"traceId\": string | null}`. `fieldErrors` is populated only for `VALIDATION_ERROR` responses that came from `@Valid` request-body validation; it's `null`/omitted for every other error, including other `VALIDATION_ERROR` responses raised programmatically (e.g. \"Unknown permission code(s)\"). `traceId` echoes the `X-Correlation-Id` request header when present — include it when reporting a bug.\n\n## Running this collection\n\nSelect the **ATW Backend - Local** environment first, and run **Login** / **Verify OTP** from the\nAuth & Account collection to populate `{{accessToken}}` — every request here requires it, plus the\nmatching `faceauth.*` permission. Then set `{{workerId}}` to a real worker id (create one via the\nWorker collection, or paste in an existing one) - nothing below creates a worker itself.\n\n1. **Get Face Enrollment** has no dependency on the other two - safe to run first against any\n   `{{workerId}}`.\n2. **Enroll / Re-enroll Worker Face** needs an actual image file attached to its `file` form-data part\n   (Postman can't supply one for you - pick any small PNG/JPEG/WEBP under 2MB) and `consentGiven` left\n   at `true`.\n3. **Remove Face Enrollment** depends on nothing - it succeeds whether or not step 2 ran.\n\n## Error codes that can appear on (almost) any endpoint\n\nThese are produced centrally — by `GlobalExceptionHandler`, by Spring Security's entry point / access-denied handler, or by the two security filters that run before a controller is even reached — so they are **not** re-documented on every individual request below; only an endpoint's *specific* codes and triggers are. Two pairs are easy to confuse and worth reading carefully:\n\n| Code | HTTP | Meaning |\n|---|---|---|\n| `VALIDATION_ERROR` | 400 | A `@Valid` request-body field failed Bean Validation (`fieldErrors[]` present), or a service-level input check failed (no `fieldErrors`). |\n| `MALFORMED_REQUEST` | 400 | Request body is missing or isn't valid JSON. |\n| `UNSUPPORTED_MEDIA_TYPE` | 415 | `Content-Type` isn't `application/json`. |\n| `UNAUTHENTICATED` | 401 | **No bearer token was presented at all**, or it's malformed/expired/signature-invalid. Produced by Spring Security itself, before any controller runs. |\n| `UNAUTHORIZED` | 401 | A **business-level** auth failure on an endpoint that doesn't require a token in the first place — bad login credentials, a locked/disabled account, an invalid refresh/reset/invite token. Same HTTP status as `UNAUTHENTICATED` above, different meaning: this means \"the token/credential you supplied is bad\", not \"you supplied nothing\". |\n| `SESSION_REVOKED` | 401 | The bearer token parses fine, but the admin's `security_version` has moved on since it was issued (password changed/reset, or their role assignment changed), or the account is no longer `ACTIVE`. The client must discard tokens and log in again — refreshing won't help, the refresh token was revoked too. |\n| `MUST_CHANGE_PASSWORD` | 403 | Authenticated, but the token's `mustChangePassword` flag is set and this isn't `/admin/account/me` or `/admin/account/change-password`. |\n| `ACCESS_DENIED` | 403 | Authenticated, but lacking the specific permission the endpoint requires. |\n| `RATE_LIMITED` | 429 | Too many requests to one of the 6 public, abuse-prone auth endpoints from the same IP within the window — default 10 requests/60s, **per endpoint**, not pooled across them. |\n| `NOT_FOUND` | 404 | The **URL itself** doesn't match any endpoint (a routing miss — typo'd path, wrong version prefix, etc). |\n| `RESOURCE_NOT_FOUND` | 404 | The URL is valid, but the specific id in it (a staff id, role id, ...) doesn't exist. Different from `NOT_FOUND` above — don't conflate \"no such route\" with \"no such record\". |\n| `METHOD_NOT_ALLOWED` | 405 | Right URL, wrong HTTP verb. |\n| `BUSINESS_RULE_VIOLATION` | 422 | Input is syntactically well-formed but violates a business rule (e.g. \"system roles cannot be modified\", a privilege-escalation attempt, self/super-admin protection). |\n| `CONFLICT` | 409 | Either an endpoint's own duplicate check (most common — a friendlier, specific message), or a generic last-resort safety net when a unique-constraint violation reaches the database despite an earlier application-level check passing (a genuine race between two concurrent requests) — that fallback case always carries the same generic message, regardless of which field collided. |\n| `INTERNAL_ERROR` | 500 | Unexpected failure. Full detail (stack trace) is logged server-side against the same `traceId` returned to the client; never returned in the response body itself. |\n\n**Specific to this module:** `RESOURCE_NOT_FOUND` above does **not** apply to any endpoint in this\ncollection. `GET` returns a not-enrolled placeholder instead of 404 for any `workerId` at all (real or\nnot - confirmed against `FaceAuthServiceImpl.getEnrollment`, which never checks the `worker` table).\nNeither `PUT` nor `DELETE` checks worker existence either; a `PUT` against a `workerId` that doesn't\nactually exist as a worker would instead fail with a generic `CONFLICT`/409 from the underlying\nforeign-key constraint - an edge case a normal UI flow should never hit, since `workerId` always comes\nfrom an already-loaded worker page.\n\n## Documentation cross-references\n\n- **ATW-Auth-Account.postman_collection.json** — login/2FA and a caller's own account self-service.\n- **ATW-RBAC-Staff.postman_collection.json** — role/permission management and staff administration.\n- **ATW-Masterdata.postman_collection.json** — departments/industries/designations/skills/minimum-wage\n  reference data, and this collection's style template.\n- `FRONTEND_HANDOVER.md` / `HANDOVER.md` — broader project handover context.\n- The **Worker** and **Worker KYC** admin APIs (collections written concurrently alongside this one)\n  own the `workerId` this whole module keys off of, and surface this module's data without a separate\n  call via `WorkerResponse.faceEnrollment` / `WorkerSummaryResponse.faceEnrolledAt`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -545,6 +545,217 @@
                 }
               ],
               "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"VALIDATION_ERROR\", \"message\": \"Invalid value for parameter 'workerId'\", \"fieldErrors\": null, \"timestamp\": \"2026-11-13T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Worker - Face Identification",
+      "description": "**New 2026-11-16.** 1:N face identification - \"whose face is this\", as opposed to enrollment's \"does this worker have a template\" or a not-yet-built 1:1 \"is this worker X\" verify. Gated by its own `faceauth.identify` permission, separate from `faceauth.view`/`faceauth.enroll` - a materially different and more sensitive capability (searching across every enrolled worker platform-wide, not acting on one already-known worker). No `workerId` in the request - that's the point - so this is NOT nested under `/workers/{workerId}/...`; it's a plain `/admin/face-identify`.\n\nCompares the uploaded photo against **every currently-enrolled worker** - not scoped to a company/team (there is no such actor in this codebase yet). `matched: false` is a normal, successful response, not an error - it means either nothing scored above the configured match threshold, or the top two candidates were too close together to confidently tell apart (see `ambiguous`). `topMatches` (up to 5, ranked) is always included for admin review even when nothing matched. The uploaded photo goes through the same quality/liveness checks as Enroll - a 422 if it fails either, before any comparison runs. A 422 also covers the case where nobody is enrolled yet at all (nothing to compare against) - a different, more actionable situation than \"compared and found nothing\".",
+      "item": [
+        {
+          "name": "Identify Face",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/face-identify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "face-identify"
+              ]
+            },
+            "description": "**Permission:** `faceauth.identify`.\n\nMultipart form-data with one part: `file` (the probe photo - PNG/JPEG/WEBP, at most 2MB, same validation as Enroll). Returns the best-matching enrolled worker, if any, plus up to the top 5 ranked candidates for review. Match decision: the best score must clear the configured threshold (`atw.face-auth.identify.threshold`, default 0.6) AND beat the runner-up by at least the configured margin (`atw.face-auth.identify.margin`, default 0.05) - otherwise `ambiguous: true` forces `matched: false` even if the raw best score alone would have passed. Thresholds are uncalibrated defaults, not tuned against any real vendor yet.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Nobody is enrolled yet at all | `BUSINESS_RULE_VIOLATION` | 422 |\n| Uploaded photo fails quality or liveness | `BUSINESS_RULE_VIOLATION` | 422 |\n| Uploaded file fails basic validation (empty, too large, wrong content type) | `VALIDATION_ERROR` | 400 |",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Confident match",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/face-identify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "face-identify"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": true, \"data\": {\"matched\": true, \"workerId\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\", \"bestScore\": 0.87, \"ambiguous\": false, \"topMatches\": [{\"workerId\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\", \"score\": 0.87}, {\"workerId\": \"99999999-9999-4999-8999-999999999999\", \"score\": 0.41}]}, \"error\": null}"
+            },
+            {
+              "name": "200 - No confident match (not an error)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/face-identify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "face-identify"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": true, \"data\": {\"matched\": false, \"workerId\": null, \"bestScore\": 0.33, \"ambiguous\": false, \"topMatches\": [{\"workerId\": \"99999999-9999-4999-8999-999999999999\", \"score\": 0.33}]}, \"error\": null}"
+            },
+            {
+              "name": "422 - Nobody enrolled yet",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/face-identify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "face-identify"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    }
+                  ]
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"BUSINESS_RULE_VIOLATION\", \"message\": \"There is no one enrolled yet to compare against.\", \"fieldErrors\": null, \"timestamp\": \"2026-11-16T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
+            },
+            {
+              "name": "422 - Liveness check failed",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/face-identify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "face-identify"
+                  ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": []
+                    }
+                  ]
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"success\": false, \"data\": null, \"error\": {\"code\": \"BUSINESS_RULE_VIOLATION\", \"message\": \"Liveness check failed - please retake the photo in person.\", \"fieldErrors\": null, \"timestamp\": \"2026-11-16T06:40:00Z\", \"traceId\": \"a1b2c3d4e5f60718\"}}"
             }
           ]
         }
