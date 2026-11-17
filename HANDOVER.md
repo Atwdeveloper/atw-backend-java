@@ -38,10 +38,38 @@ Packaging produces a single executable jar: `target/atw-backend-0.0.1-SNAPSHOT.j
    makes no network call, so **the app still boots without it reachable** — only those specific
    upload/download endpoints fail until it's configured. Local dev uses Azurite; in Azure, set
    `AZURE_STORAGE_ENDPOINT` and leave the connection string empty so managed identity is used
-   (`azure-identity` is already a dependency).
+   (`azure-identity` is already a dependency) — grant the runtime identity the **Storage Blob Data
+   Contributor** role on the storage account (needed for `generateUserDelegationSas`; there is no
+   account key in this mode, so a narrower "reader" role is not enough).
 7. **(Optional) Azure Communication Services or SMTP** — for outbound email (OTP codes, password
    reset links, notifications). Without one configured, `MAIL_PROVIDER=log` just writes emails to the
-   application log — fine for a first smoke test, not for real use.
+   application log — fine for a first smoke test, not for real use. **Admin login depends entirely on
+   this** (OTP is mandatory 2FA, no password-only fallback) — see the `ADMIN_FIXED_OTP` escape hatch
+   in §3 if real email isn't verified working yet on a dev-tier environment.
+8. **Azure Key Vault and Azure App Configuration** — back the deploy pipeline's whole config/secrets
+   story (see the "How a variable actually reaches the container" note in §3): every setting in §3's
+   tables needs a matching `backend-<kebab-case>` entry in one of these two (plain values in App
+   Configuration labeled `dev`, secrets in Key Vault), or it won't survive the next automated deploy.
+9. **The runtime user-assigned managed identity** (`runtime_identity_resource_id` in the deploy
+   pipeline) needs its own RBAC role assignments on the resources it touches — the pipeline *uses*
+   these, it doesn't grant them: **`Key Vault Secrets User`** on the vault (to resolve `backend-*`
+   secret references at container start), **`AcrPull`** on the registry (to pull the image —
+   `containerapp registry set --identity` in the deploy action configures the Container App to use
+   this identity for pulls, but the identity still needs the role itself), and, if/when Blob Storage
+   or Azure Communication Services are switched to managed-identity mode instead of a connection
+   string (§2.6/§3's `MAIL_PROVIDER=azure`), **`Storage Blob Data Contributor`** / the appropriate ACS
+   role on those resources too. A deploy or a specific feature failing with an authorization/403 error
+   despite correct configuration almost always means one of these role assignments is missing, not a
+   code or config bug.
+10. **Face recognition service (`faceauth` module)** — already hosted externally on Render
+   (`atw-face-auth-service`, same codebase as `D:\Office_project\face_auth_model\face-auth` run
+   locally) — **nothing to provision in Azure for this one**, just configuration (§3). Backs worker
+   face enrollment, 1:N identify ("whose face is this"), and enrollment-time duplicate-face
+   rejection. **Unlike every other integration above, leaving this unconfigured fails silently, not
+   loudly**: the app boots fine and every enroll/identify call "succeeds" against a stub that returns
+   random, photo-independent data — it will never actually recognize anyone or catch a real duplicate
+   face, with no error anywhere to notice. Confirm `FACE_AUTH_PROVIDER=python` is actually set, not
+   just assumed.
 
 ---
 
@@ -49,6 +77,27 @@ Packaging produces a single executable jar: `target/atw-backend-0.0.1-SNAPSHOT.j
 
 The app is **12-factor**: all environment-specific config comes from environment variables. No code
 changes are needed between local and Azure — only these variables differ.
+
+**How a variable actually reaches the container on this project's dev environment (updated
+2026-11-17 — the automation below didn't exist when §4's manual example was first written, and that
+example is now misleading if followed for an ongoing deploy):** `.github/workflows/deploy-backend.yml`
+(push to `develop`, or manual dispatch) builds the jar, pushes the image to ACR, then
+`.github/actions/backend-tasks` (`operation: deploy`) rebuilds the **entire** env-var set on every
+run from two sources and pushes it with one `az containerapp update --set-env-vars`:
+- **Plain (non-secret) values** → an **Azure App Configuration** key-value, key named
+  `backend-<kebab-case>`, **label `dev`**, ordinary text content-type (no Key Vault references or
+  feature flags allowed here — the action rejects those). `backend-face-auth-base-url` becomes the
+  `FACE_AUTH_BASE_URL` environment variable.
+- **Secrets** → an **enabled** Key Vault secret, same `backend-<kebab-case>` naming. The action wires
+  it as a Container Apps secret that's itself a Key Vault reference resolved by the attached runtime
+  managed identity at container start — the raw value never appears in the pipeline, its logs, or
+  anywhere in this repo. `backend-face-auth-api-key` becomes `FACE_AUTH_API_KEY`.
+- A setting must live in **exactly one** of the two stores — the action errors out if the same
+  derived name exists in both, or if an App Configuration entry isn't a plain value.
+- Practical effect: **every variable in the tables below needs a matching `backend-*` entry in App
+  Configuration or Key Vault (labeled/scoped to this dev environment) to survive the next deploy** —
+  anything set only via a one-off `az containerapp update --env-vars` (as in §4's bootstrap example)
+  gets overwritten the next time this pipeline runs.
 
 ### Required outside a developer's own machine
 
@@ -63,6 +112,7 @@ changes are needed between local and Azure — only these variables differ.
 | `REDIS_SSL` | ✅ | `true` | Enable TLS (Azure requires it) |
 | `JWT_SECRET` | ✅ | *(secret, ≥32 bytes, unique per environment)* | HS256 signing key for admin access tokens. **There is no insecure fallback** — see §8. |
 | `PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment)* | AES-256-GCM key encrypting staff KYC numbers and bank account numbers at rest. **No insecure fallback, same as `JWT_SECRET`** — see §8. |
+| `WORKER_PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment, DIFFERENT from `PII_ENCRYPTION_KEY`)* | AES-256-GCM key encrypting **worker** KYC/bank/statutory numbers at rest — deliberately a separate key from the staff one above so a compromise of one key doesn't also expose the other dataset. Same no-insecure-fallback rule — added when the `worker` module shipped; missing from this table until now. |
 
 > ⚠️ **Do not set `SPRING_PROFILES_ACTIVE` to `local` (or include `local` in a comma-list) anywhere
 > outside a developer's own machine.** That profile layers in a publicly-committed dev JWT secret and
@@ -87,6 +137,17 @@ changes are needed between local and Azure — only these variables differ.
 The bootstrap admin is created with `mustChangePassword = true` — the frontend forces a password
 change before anything else is usable, and that first login's OTP + password-change flow is the
 actual smoke test (§7).
+
+### Face recognition — required for real matching, but fails SILENTLY if skipped (see §2.8)
+
+| Variable | Default | Example (Azure) | Meaning |
+|---|---|---|---|
+| `FACE_AUTH_PROVIDER` | `stub` | `python` | `stub` (default) returns random, photo-independent data for every photo — enroll/identify/duplicate-detection all return a plausible-looking response but never a real result, with no error. Set to `python` for the real integration. |
+| `FACE_AUTH_BASE_URL` | *(empty)* | `https://face-auth-service-m2o7.onrender.com` | Only read once `FACE_AUTH_PROVIDER=python`. The already-hosted Render deployment — not an Azure resource. |
+| `FACE_AUTH_API_KEY` | *(empty)* | *(secret)* | Checked via `X-API-Key` by the external service. Missing/wrong → every enroll/identify call fails loudly with `invalid_api_key` (unlike the silent stub fallback above). |
+| `FACE_AUTH_TIMEOUT` | `PT75S` | — | Render's free tier cold-starts after idling; the default already accounts for it. |
+| `FACE_AUTH_IDENTIFY_THRESHOLD` / `FACE_AUTH_IDENTIFY_MARGIN` | `0.5` / `0.05` | — | 1:N identify match confidence (legacy's own production-validated values, not yet recalibrated for this specific deployment). |
+| `FACE_AUTH_DUPLICATE_THRESHOLD` | `0.5` | — | Enrollment-time duplicate-face rejection threshold. |
 
 ### Optional (sensible defaults shown)
 
@@ -125,6 +186,12 @@ actual smoke test (§7).
 
 ## 4. Build & run the container
 
+**This section is for the one-time initial creation of the Container App resource itself (it doesn't
+exist yet), or for a from-scratch manual deploy with no pipeline.** Once `.github/workflows/
+deploy-backend.yml` is live against it, every ongoing config change goes through App Configuration /
+Key Vault instead (§4b below) — anything set here directly gets overwritten by the next automated
+deploy, since that pipeline rebuilds the full env-var set from those two stores every run.
+
 ```bash
 # Build (run from the repo root)
 docker build -t atw-backend:latest .
@@ -155,6 +222,29 @@ az containerapp create \
 Generate `JWT_SECRET` once with something like `openssl rand -base64 48` and store it as a secret —
 treat it like any other credential (rotating it invalidates every currently-issued access token, by
 design).
+
+### 4b. Adding/changing a setting once the pipeline manages this app (the normal path)
+
+Pick App Configuration for a plain value, or Key Vault for a secret — never both for the same
+setting, and never a Key Vault reference *inside* App Configuration (the deploy action rejects both).
+Example: wiring the face-recognition service from §3 end-to-end:
+
+```bash
+# Plain values -> App Configuration, labeled "dev", one key-value per setting
+az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
+  --key backend-face-auth-provider  --value python
+az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
+  --key backend-face-auth-base-url --value https://face-auth-service-m2o7.onrender.com
+
+# Secret -> Key Vault, enabled, same backend-<kebab-case> naming
+az keyvault secret set --vault-name <key_vault_name> \
+  --name backend-face-auth-api-key --value "<the real key>"
+```
+
+Nothing further to run by hand — the next push to `develop` (or a manual `workflow_dispatch`) picks
+both up automatically and updates the Container App. To confirm before/without a full pipeline run,
+`az containerapp show --name <app> --resource-group <rg> --query
+"properties.template.containers[0].env"` lists the env vars the app actually has right now.
 
 ---
 
@@ -253,14 +343,15 @@ dockerized Postgres/Redis/the app itself — see §9) and produces exactly the r
 
 ## 8. Security notes (read this before your first real deploy)
 
-- **No insecure fallback for `JWT_SECRET` or `PII_ENCRYPTION_KEY`.** Startup has a dedicated check
-  (`StartupSecurityValidator`) that refuses to boot — throws and exits non-zero — if, outside the
-  `local`/`test` Spring profiles: the JWT secret is missing, shorter than 32 bytes, or the
-  publicly-committed local-dev literal; the PII key is missing, not valid base64, doesn't decode to
-  exactly 32 bytes, or is the publicly-committed local-dev literal; or `ADMIN_OTP_IN_RESPONSE` is
-  left on. Same check for `ADMIN_BOOTSTRAP_PASSWORD` when bootstrap is enabled. **A failed deploy
-  here means a missing/weak secret (or a test-only flag left on), not a bug** — fix the env var,
-  don't work around the check.
+- **No insecure fallback for `JWT_SECRET`, `PII_ENCRYPTION_KEY`, or `WORKER_PII_ENCRYPTION_KEY`.**
+  Startup has a dedicated check (`StartupSecurityValidator`) that refuses to boot — throws and exits
+  non-zero — if, outside the `local`/`test` Spring profiles: the JWT secret is missing, shorter than
+  32 bytes, or the publicly-committed local-dev literal; **either** PII key (staff or worker — same
+  four checks, run independently for each) is missing, not valid base64, doesn't decode to exactly 32
+  bytes, or is the publicly-committed local-dev literal; or `ADMIN_OTP_IN_RESPONSE` is left on. Same
+  check for `ADMIN_BOOTSTRAP_PASSWORD` when bootstrap is enabled. **A failed deploy here means a
+  missing/weak secret (or a test-only flag left on), not a bug** — fix the env var, don't work around
+  the check.
 - **`ADMIN_FIXED_OTP` is gated the same strict way, plus a profile check.** It's refused at startup
   if set under any profile other than `dev` (a static, config-known OTP is a standing 2FA bypass for
   every admin — see §3), and refused if it isn't exactly `ADMIN_OTP_LENGTH` numeric digits. When it
