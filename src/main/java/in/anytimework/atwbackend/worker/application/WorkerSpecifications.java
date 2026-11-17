@@ -1,6 +1,7 @@
 package in.anytimework.atwbackend.worker.application;
 
 import in.anytimework.atwbackend.worker.domain.Worker;
+import in.anytimework.atwbackend.worker.domain.WorkerAddress;
 import in.anytimework.atwbackend.worker.domain.WorkerDesignation;
 import in.anytimework.atwbackend.worker.domain.WorkerSkill;
 import in.anytimework.atwbackend.worker.domain.WorkerStatus;
@@ -65,6 +66,33 @@ final class WorkerSpecifications {
     /** Already-resolved worker ids (e.g. from a cross-module KYC-status lookup) - never queried via a JPA join across module boundaries. */
     static Specification<Worker> idIn(Set<UUID> ids) {
         return (root, query, cb) -> root.get("id").in(ids);
+    }
+
+    /**
+     * Matches a worker whose PERMANENT or CURRENT {@link WorkerAddress} has one of the given state
+     * ids - deliberately not restricted to one address type, see {@link WorkerSearchCriteria}'s
+     * Javadoc. Same subquery technique as {@link #hasDesignation}/{@link #hasSkill}:
+     * {@link WorkerAddress} holds no navigable association back to {@link Worker}.
+     */
+    static Specification<Worker> hasState(Set<UUID> stateIds) {
+        return (root, query, cb) -> {
+            Subquery<UUID> subquery = query.subquery(UUID.class);
+            var workerAddress = subquery.from(WorkerAddress.class);
+            subquery.select(workerAddress.get("workerId"))
+                    .where(workerAddress.get("address").get("stateId").in(stateIds));
+            return root.get("id").in(subquery);
+        };
+    }
+
+    /** City counterpart of {@link #hasState} - same either-address-type matching. */
+    static Specification<Worker> hasCity(Set<UUID> cityIds) {
+        return (root, query, cb) -> {
+            Subquery<UUID> subquery = query.subquery(UUID.class);
+            var workerAddress = subquery.from(WorkerAddress.class);
+            subquery.select(workerAddress.get("workerId"))
+                    .where(workerAddress.get("address").get("cityId").in(cityIds));
+            return root.get("id").in(subquery);
+        };
     }
 
     /**

@@ -2,6 +2,7 @@ package in.anytimework.atwbackend.worker;
 
 import in.anytimework.atwbackend.document.FileStorageTestConfig;
 import in.anytimework.atwbackend.faceauth.application.FaceAuthService;
+import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollmentRepository;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
@@ -11,6 +12,7 @@ import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
 import in.anytimework.atwbackend.masterdata.application.DepartmentService;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
+import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
 import in.anytimework.atwbackend.shared.api.BulkActionFailure;
 import in.anytimework.atwbackend.shared.api.BulkActionResult;
 import in.anytimework.atwbackend.shared.api.PageResponse;
@@ -18,10 +20,13 @@ import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerAddressRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerSummaryResponse;
+import in.anytimework.atwbackend.worker.application.WorkerAddressService;
 import in.anytimework.atwbackend.worker.application.WorkerSearchCriteria;
 import in.anytimework.atwbackend.worker.application.WorkerService;
+import in.anytimework.atwbackend.worker.domain.AddressType;
 import in.anytimework.atwbackend.worker.domain.Gender;
 import in.anytimework.atwbackend.worker.domain.WorkerStatus;
 import in.anytimework.atwbackend.worker.domain.WorkerStatusHistoryRepository;
@@ -35,11 +40,13 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -75,6 +82,12 @@ class WorkerBulkOperationsIntegrationTest {
     private WorkerStatusHistoryRepository statusHistoryRepository;
     @Autowired
     private FaceAuthService faceAuthService;
+    @Autowired
+    private WorkerFaceEnrollmentRepository faceEnrollmentRepository;
+    @Autowired
+    private WorkerAddressService addressService;
+    @Autowired
+    private GeographyLookupService geography;
 
     private static final byte[] FAKE_JPEG_BYTES = {
             (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0, 1, 2, 3, 4, 5
@@ -102,8 +115,26 @@ class WorkerBulkOperationsIntegrationTest {
                 uniqueMobile(), null, department.id(), null, null, Set.of(designationId), designationId, Set.of()));
     }
 
+    private record StateCity(UUID stateId, String stateName, UUID cityId, String cityName) {
+    }
+
+    /** Scans the seeded masterdata for states that actually have at least one city on file (V21__seed_city_data.sql), rather than assuming a fixed id - test data is seed data, not a hardcoded fixture. */
+    private List<StateCity> seededStateCitiesWithCities(int count) {
+        List<StateCity> result = new ArrayList<>();
+        for (var state : geography.listStates()) {
+            var cities = geography.listCities(state.id());
+            if (!cities.isEmpty()) {
+                result.add(new StateCity(state.id(), state.name(), cities.get(0).id(), cities.get(0).name()));
+                if (result.size() == count) {
+                    return result;
+                }
+            }
+        }
+        throw new IllegalStateException("Need " + count + " seeded states with at least one city each for this test");
+    }
+
     private static WorkerSearchCriteria emptyCriteria() {
-        return new WorkerSearchCriteria(null, null, null, null, null, null, null, null, null);
+        return new WorkerSearchCriteria(null, null, null, null, null, null, null, null, null, null, null);
     }
 
     // ---- Multiselect filters ------------------------------------------------------------------
@@ -120,7 +151,7 @@ class WorkerBulkOperationsIntegrationTest {
         WorkerResponse workerC = createWorker(department, designationC.id());
 
         PageResponse<WorkerSummaryResponse> result = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designationA.id(), designationB.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designationA.id(), designationB.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(WorkerSummaryResponse::id)
@@ -141,11 +172,108 @@ class WorkerBulkOperationsIntegrationTest {
         // can never leak into the result set (gotcha: never trust an otherwise-unfiltered list()).
         PageResponse<WorkerSummaryResponse> result = workerService.list(
                 new WorkerSearchCriteria(Set.of(WorkerStatus.REGISTERED, WorkerStatus.INACTIVE), null, null,
-                        Set.of(designation.id()), null, null, null, null, null),
+                        Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(WorkerSummaryResponse::id)
                 .containsExactlyInAnyOrder(registeredWorker.id(), inactiveWorker.id());
+    }
+
+    // ---- state/city (address) filters - match EITHER address type, see WorkerSearchCriteria -------
+
+    @Test
+    void list_filtersByState_matchesWorkerViaEitherAddressType() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("StateFilter");
+        List<StateCity> stateCities = seededStateCitiesWithCities(2);
+        StateCity stateA = stateCities.get(0);
+        StateCity stateB = stateCities.get(1);
+
+        WorkerResponse currentMatches = createWorker(department, designation.id());
+        addressService.update(currentMatches.id(), AddressType.CURRENT,
+                new UpdateWorkerAddressRequest("1 Current St", null, stateA.stateId(), null, "100001"));
+
+        WorkerResponse permanentMatches = createWorker(department, designation.id());
+        addressService.update(permanentMatches.id(), AddressType.PERMANENT,
+                new UpdateWorkerAddressRequest("1 Permanent St", null, stateA.stateId(), null, "100002"));
+
+        WorkerResponse noMatch = createWorker(department, designation.id());
+        addressService.update(noMatch.id(), AddressType.CURRENT,
+                new UpdateWorkerAddressRequest("1 Other St", null, stateB.stateId(), null, "100003"));
+
+        PageResponse<WorkerSummaryResponse> result = workerService.list(
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null,
+                        Set.of(stateA.stateId()), null),
+                PageRequest.of(0, 50));
+
+        assertThat(result.content()).extracting(WorkerSummaryResponse::id)
+                .containsExactlyInAnyOrder(currentMatches.id(), permanentMatches.id());
+        assertThat(result.content()).extracting(WorkerSummaryResponse::id).doesNotContain(noMatch.id());
+    }
+
+    @Test
+    void list_filtersByCity_matchesWorkerViaEitherAddressType() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("CityFilter");
+        List<StateCity> stateCities = seededStateCitiesWithCities(2);
+        StateCity cityA = stateCities.get(0);
+        StateCity cityB = stateCities.get(1);
+
+        WorkerResponse matches = createWorker(department, designation.id());
+        addressService.update(matches.id(), AddressType.CURRENT,
+                new UpdateWorkerAddressRequest("1 Match St", null, cityA.stateId(), cityA.cityId(), "100001"));
+
+        WorkerResponse noMatch = createWorker(department, designation.id());
+        addressService.update(noMatch.id(), AddressType.CURRENT,
+                new UpdateWorkerAddressRequest("1 NoMatch St", null, cityB.stateId(), cityB.cityId(), "100002"));
+
+        PageResponse<WorkerSummaryResponse> result = workerService.list(
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null,
+                        null, Set.of(cityA.cityId())),
+                PageRequest.of(0, 50));
+
+        assertThat(result.content()).extracting(WorkerSummaryResponse::id).containsExactly(matches.id());
+    }
+
+    // ---- city/state names in the listing/export (display only - see WorkerSummaryResponse) --------
+
+    @Test
+    void list_includesCurrentAndPermanentCityStateNames() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("AddressInList");
+        StateCity stateCity = seededStateCitiesWithCities(1).get(0);
+        WorkerResponse worker = createWorker(department, designation.id());
+        addressService.update(worker.id(), AddressType.CURRENT,
+                new UpdateWorkerAddressRequest("1 Current St", null, stateCity.stateId(), stateCity.cityId(), "100001"));
+
+        PageResponse<WorkerSummaryResponse> result = workerService.list(
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
+                PageRequest.of(0, 50));
+
+        WorkerSummaryResponse row = result.content().stream().filter(w -> w.id().equals(worker.id())).findFirst().orElseThrow();
+        assertThat(row.currentCity()).isEqualTo(stateCity.cityName());
+        assertThat(row.currentState()).isEqualTo(stateCity.stateName());
+        assertThat(row.permanentCity()).isNull();
+        assertThat(row.permanentState()).isNull();
+    }
+
+    @Test
+    void exportToCsv_includesCityAndStateColumns() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("AddressInCsv");
+        StateCity stateCity = seededStateCitiesWithCities(1).get(0);
+        WorkerResponse worker = createWorker(department, designation.id());
+        addressService.update(worker.id(), AddressType.PERMANENT,
+                new UpdateWorkerAddressRequest("1 Permanent St", null, stateCity.stateId(), stateCity.cityId(), "100001"));
+
+        byte[] csvBytes = workerService.exportToCsv(Set.of(worker.id()), emptyCriteria());
+        String csv = new String(csvBytes, StandardCharsets.UTF_8);
+        List<String> lines = List.of(csv.split("\r\n"));
+
+        assertThat(lines.get(0)).isEqualTo("Worker Code,First Name,Last Name,Mobile Number,Status,KYC Status,"
+                + "Designation,Department,Current City,Current State,Permanent City,Permanent State,Face Enrolled");
+        assertThat(lines).anyMatch(line -> line.startsWith(worker.workerCode())
+                && line.contains(stateCity.cityName()) && line.contains(stateCity.stateName()));
     }
 
     // ---- search ---------------------------------------------------------------------------------
@@ -159,7 +287,7 @@ class WorkerBulkOperationsIntegrationTest {
                 null, uniqueMobile(), email, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         PageResponse<WorkerSummaryResponse> result = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, email, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, email, null, null, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(WorkerSummaryResponse::id).containsExactly(worker.id());
@@ -177,19 +305,19 @@ class WorkerBulkOperationsIntegrationTest {
 
         PageResponse<WorkerSummaryResponse> withinRange = workerService.list(
                 new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null,
-                        today, today),
+                        today, today, null, null),
                 PageRequest.of(0, 50));
         assertThat(withinRange.content()).extracting(WorkerSummaryResponse::id).contains(worker.id());
 
         PageResponse<WorkerSummaryResponse> beforeRegistration = workerService.list(
                 new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null,
-                        null, today.minusDays(1)),
+                        null, today.minusDays(1), null, null),
                 PageRequest.of(0, 50));
         assertThat(beforeRegistration.content()).extracting(WorkerSummaryResponse::id).doesNotContain(worker.id());
 
         PageResponse<WorkerSummaryResponse> afterRegistration = workerService.list(
                 new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null,
-                        today.plusDays(1), null),
+                        today.plusDays(1), null, null, null),
                 PageRequest.of(0, 50));
         assertThat(afterRegistration.content()).extracting(WorkerSummaryResponse::id).doesNotContain(worker.id());
     }
@@ -207,12 +335,12 @@ class WorkerBulkOperationsIntegrationTest {
                 null, uniqueMobile(), null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         PageResponse<WorkerSummaryResponse> ascending = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 100, Sort.by("lastName").ascending()));
         assertThat(ascending.content()).extracting(WorkerSummaryResponse::id).containsExactly(alpha.id(), beta.id());
 
         PageResponse<WorkerSummaryResponse> descending = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 100, Sort.by("lastName").descending()));
         assertThat(descending.content()).extracting(WorkerSummaryResponse::id).containsExactly(beta.id(), alpha.id());
     }
@@ -278,7 +406,7 @@ class WorkerBulkOperationsIntegrationTest {
         WorkerResponse worker = createWorker(department, designation.id());
 
         byte[] csvBytes = workerService.exportToCsv(Set.of(),
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null));
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null));
         String csv = new String(csvBytes, StandardCharsets.UTF_8);
 
         assertThat(csv).contains(worker.workerCode());
@@ -309,7 +437,7 @@ class WorkerBulkOperationsIntegrationTest {
         WorkerResponse worker = createWorker(department, designation.id());
 
         PageResponse<WorkerSummaryResponse> beforeEnroll = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 50));
         assertThat(beforeEnroll.content()).hasSize(1);
         assertThat(beforeEnroll.content().get(0).id()).isEqualTo(worker.id());
@@ -318,7 +446,7 @@ class WorkerBulkOperationsIntegrationTest {
         faceAuthService.enroll(worker.id(), "face.jpg", "image/jpeg", FAKE_JPEG_BYTES, true, "127.0.0.1");
 
         PageResponse<WorkerSummaryResponse> afterEnroll = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 50));
         assertThat(afterEnroll.content()).hasSize(1);
         assertThat(afterEnroll.content().get(0).faceEnrolledAt()).isNotNull();
@@ -352,8 +480,8 @@ class WorkerBulkOperationsIntegrationTest {
         String csv = new String(csvBytes, StandardCharsets.UTF_8);
         List<String> lines = List.of(csv.split("\r\n"));
 
-        assertThat(lines.get(0)).isEqualTo(
-                "Worker Code,First Name,Last Name,Mobile Number,Status,KYC Status,Designation,Department,Face Enrolled");
+        assertThat(lines.get(0)).isEqualTo("Worker Code,First Name,Last Name,Mobile Number,Status,KYC Status,"
+                + "Designation,Department,Current City,Current State,Permanent City,Permanent State,Face Enrolled");
         assertThat(lines).anyMatch(line -> line.startsWith(enrolledWorker.workerCode()) && line.endsWith(",Yes"));
         assertThat(lines).anyMatch(line -> line.startsWith(unenrolledWorker.workerCode()) && line.endsWith(",No"));
     }
@@ -430,7 +558,7 @@ class WorkerBulkOperationsIntegrationTest {
         // Not just get() by id - the Specification/Criteria-based list() path is a genuinely
         // different query mechanism and needs its own proof that @SQLRestriction applies there too.
         PageResponse<WorkerSummaryResponse> result = workerService.list(
-                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 50));
         assertThat(result.content()).extracting(WorkerSummaryResponse::id).doesNotContain(worker.id());
     }
@@ -449,6 +577,37 @@ class WorkerBulkOperationsIntegrationTest {
         // physically in the database, not cascaded away by the old hard-delete's ON DELETE CASCADE.
         assertThat(statusHistoryRepository.findByWorkerIdOrderByCreatedAtDesc(worker.id(), PageRequest.of(0, 50)))
                 .isNotEmpty();
+    }
+
+    /**
+     * Proves {@code WorkerService.delete} calls {@code FaceAuthService.excludeFromMatching} (added
+     * 2026-11-17 alongside enrollment-time duplicate detection and face identify's eligibility
+     * filtering) - the row and its photo are still there (see the class/method-level Javadoc on why
+     * nothing is cascaded away), only {@code excludedFromMatchingAt} changes.
+     */
+    @Test
+    void delete_excludesFaceEnrollmentFromMatching_butPreservesTheRowItself() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("DeleteExcludesFace");
+        WorkerResponse worker = createWorker(department, designation.id());
+        faceAuthService.enroll(worker.id(), "face.jpg", "image/jpeg", FAKE_JPEG_BYTES, true, "127.0.0.1");
+        assertThat(faceEnrollmentRepository.findByWorkerId(worker.id()).orElseThrow().getExcludedFromMatchingAt()).isNull();
+        workerService.updateStatus(worker.id(), WorkerStatus.INACTIVE, "Leaving the platform");
+
+        workerService.delete(worker.id());
+
+        assertThat(faceEnrollmentRepository.findByWorkerId(worker.id()).orElseThrow().getExcludedFromMatchingAt()).isNotNull();
+        assertThat(faceAuthService.getEnrollment(worker.id()).enrolled()).isTrue();
+    }
+
+    @Test
+    void delete_whenNothingWasEverFaceEnrolled_excludeFromMatchingIsANoOp() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("DeleteNoFaceEnrollment");
+        WorkerResponse worker = createWorker(department, designation.id());
+        workerService.updateStatus(worker.id(), WorkerStatus.INACTIVE, "Leaving the platform");
+
+        assertThatCode(() -> workerService.delete(worker.id())).doesNotThrowAnyException();
     }
 
     @Test

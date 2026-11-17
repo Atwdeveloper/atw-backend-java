@@ -41,10 +41,11 @@ class FaceAuthServiceIdentifyTest {
     private final FaceEnrollmentPhotoSupport photoSupport = mock(FaceEnrollmentPhotoSupport.class);
     private final DocumentService documentService = mock(DocumentService.class);
     private final FaceIdentifyProperties identifyProperties = new FaceIdentifyProperties(0.6, 0.05);
+    private final FaceDuplicateProperties duplicateProperties = new FaceDuplicateProperties(0.5);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-16T06:00:00Z"), ZoneOffset.UTC);
 
     private final FaceAuthServiceImpl service = new FaceAuthServiceImpl(
-            enrollments, faceAuthPort, photoSupport, documentService, identifyProperties, clock);
+            enrollments, faceAuthPort, photoSupport, documentService, identifyProperties, duplicateProperties, clock);
 
     private static final byte[] PROBE_BYTES = {1, 2, 3};
     private static final FaceQualitySnapshot ACCEPTABLE_QUALITY = new FaceQualitySnapshot(400, 0.9, 0.5, true, List.of());
@@ -69,7 +70,7 @@ class FaceAuthServiceIdentifyTest {
 
     @Test
     void identify_withNoOneEnrolled_throwsBusinessRuleException() {
-        when(enrollments.findAll()).thenReturn(List.of());
+        when(enrollments.findByExcludedFromMatchingAtIsNull()).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.identify(PROBE_BYTES, "image/jpeg"))
                 .isInstanceOf(BusinessRuleException.class)
@@ -80,7 +81,7 @@ class FaceAuthServiceIdentifyTest {
     void identify_aClearBestMatch_isConfidentAndNotAmbiguous() {
         UUID matching = UUID.randomUUID();
         UUID other = UUID.randomUUID();
-        when(enrollments.findAll()).thenReturn(List.of(
+        when(enrollments.findByExcludedFromMatchingAtIsNull()).thenReturn(List.of(
                 enrollmentWithEmbedding(matching, vectorWithCosine(1.0)),   // score 1.0 vs probe
                 enrollmentWithEmbedding(other, vectorWithCosine(0.0))));    // score 0.0 vs probe - orthogonal
         stubProbeEmbedding(vectorWithCosine(1.0)); // probe == (1,0,0,...)
@@ -97,7 +98,7 @@ class FaceAuthServiceIdentifyTest {
     @Test
     void identify_whenBestScoreIsBelowThreshold_isNotMatchedButNotAnError() {
         UUID candidate = UUID.randomUUID();
-        when(enrollments.findAll()).thenReturn(List.of(enrollmentWithEmbedding(candidate, vectorWithCosine(0.3))));
+        when(enrollments.findByExcludedFromMatchingAtIsNull()).thenReturn(List.of(enrollmentWithEmbedding(candidate, vectorWithCosine(0.3))));
         stubProbeEmbedding(vectorWithCosine(1.0));
 
         FaceIdentificationResult result = service.identify(PROBE_BYTES, "image/jpeg");
@@ -113,7 +114,7 @@ class FaceAuthServiceIdentifyTest {
         UUID best = UUID.randomUUID();
         UUID runnerUp = UUID.randomUUID();
         // 0.70 vs 0.68 - both clear the 0.6 threshold, but the 0.02 gap is under the 0.05 margin.
-        when(enrollments.findAll()).thenReturn(List.of(
+        when(enrollments.findByExcludedFromMatchingAtIsNull()).thenReturn(List.of(
                 enrollmentWithEmbedding(best, vectorWithCosine(0.70)),
                 enrollmentWithEmbedding(runnerUp, vectorWithCosine(0.68))));
         stubProbeEmbedding(vectorWithCosine(1.0));
@@ -134,7 +135,7 @@ class FaceAuthServiceIdentifyTest {
                 enrollmentWithEmbedding(UUID.randomUUID(), vectorWithCosine(0.3)),
                 enrollmentWithEmbedding(UUID.randomUUID(), vectorWithCosine(0.4)),
                 enrollmentWithEmbedding(UUID.randomUUID(), vectorWithCosine(0.5)));
-        when(enrollments.findAll()).thenReturn(sixCandidates);
+        when(enrollments.findByExcludedFromMatchingAtIsNull()).thenReturn(sixCandidates);
         stubProbeEmbedding(vectorWithCosine(1.0));
 
         FaceIdentificationResult result = service.identify(PROBE_BYTES, "image/jpeg");
@@ -147,7 +148,7 @@ class FaceAuthServiceIdentifyTest {
     @Test
     void identify_whenProbeQualityIsUnacceptable_throwsBusinessRuleException() {
 
-        when(enrollments.findAll()).thenReturn(List.of(enrollmentWithEmbedding(UUID.randomUUID(), vectorWithCosine(1.0))));
+        when(enrollments.findByExcludedFromMatchingAtIsNull()).thenReturn(List.of(enrollmentWithEmbedding(UUID.randomUUID(), vectorWithCosine(1.0))));
         FaceQualitySnapshot poor = new FaceQualitySnapshot(50, 0.1, 0.1, false, List.of("face too small"));
         when(faceAuthPort.embed(any(), anyString()))
                 .thenReturn(new FaceEmbeddingResult(vectorWithCosine(1.0), poor, true, 0.9));
@@ -159,7 +160,7 @@ class FaceAuthServiceIdentifyTest {
 
     @Test
     void identify_whenProbeLivenessFails_throwsBusinessRuleException() {
-        when(enrollments.findAll()).thenReturn(List.of(enrollmentWithEmbedding(UUID.randomUUID(), vectorWithCosine(1.0))));
+        when(enrollments.findByExcludedFromMatchingAtIsNull()).thenReturn(List.of(enrollmentWithEmbedding(UUID.randomUUID(), vectorWithCosine(1.0))));
         when(faceAuthPort.embed(any(), anyString()))
                 .thenReturn(new FaceEmbeddingResult(vectorWithCosine(1.0), ACCEPTABLE_QUALITY, false, 0.2));
 

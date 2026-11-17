@@ -172,6 +172,29 @@ class FaceAuthServiceIntegrationTest {
         assertThatCode(() -> faceAuthService.removeEnrollment(workerId)).doesNotThrowAnyException();
     }
 
+    @Test
+    void excludeFromMatching_marksTheRowButDoesNotDeleteIt() {
+        UUID workerId = createWorker();
+        faceAuthService.enroll(workerId, "face.jpg", "image/jpeg", FAKE_JPEG_BYTES, true, "127.0.0.1");
+
+        faceAuthService.excludeFromMatching(workerId);
+
+        WorkerFaceEnrollment reloaded = enrollmentRepository.findByWorkerId(workerId).orElseThrow();
+        assertThat(reloaded.getExcludedFromMatchingAt()).isNotNull();
+        assertThat(enrollmentRepository.findByExcludedFromMatchingAtIsNull())
+                .noneMatch(e -> e.getWorkerId().equals(workerId));
+        // Preserved, not deleted - same "excluded from future matching, never destroyed" contract
+        // WorkerService.delete relies on.
+        assertThat(faceAuthService.getEnrollment(workerId).enrolled()).isTrue();
+    }
+
+    @Test
+    void excludeFromMatching_whenNothingEnrolled_isANoOp() {
+        UUID workerId = createWorker();
+
+        assertThatCode(() -> faceAuthService.excludeFromMatching(workerId)).doesNotThrowAnyException();
+    }
+
     /**
      * {@code identify}'s threshold/ambiguity decision logic, and its "nobody enrolled yet" guard, need
      * a controlled/empty candidate set to verify deterministically - see
@@ -189,8 +212,6 @@ class FaceAuthServiceIntegrationTest {
 
         FaceIdentificationResult result = faceAuthService.identify(FAKE_JPEG_BYTES, "image/jpeg");
 
-        // The stub's embeddings are random on every call, so a confident match can't be asserted here -
-        // only that the comparison ran end-to-end and returned a well-formed result either way.
         assertThat(result.topMatches()).isNotEmpty();
         assertThat(result.bestScore()).isBetween(-1.0, 1.0);
     }

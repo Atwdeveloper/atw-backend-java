@@ -9,7 +9,9 @@ import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerDesignationsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerSkillsRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.BankAccountCheckResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.BulkUpdateWorkerStatusRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.CheckBankAccountRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CompleteAadhaarVerificationRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerNoteRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
@@ -134,6 +136,12 @@ public class AdminWorkerController {
                   "livenessConfidence": 0.97,
                   "photoUrl": "https://atwstorage.blob.core.windows.net/documents/face-enrollment/c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e.jpg?sv=2025-05-05&se=2026-11-13T10%3A15%3A00Z&sr=b&sp=r&sig=REDACTED"
                 },
+                "currentAddress": {
+                  "line1": "Worker Hostel", "line2": "Sector 18", "city": "Gurugram", "state": "Haryana", "pincode": "122001"
+                },
+                "permanentAddress": {
+                  "line1": "12 Home Street", "line2": null, "city": "Lucknow", "state": "Uttar Pradesh", "pincode": "226001"
+                },
                 "createdAt": "2026-09-01T06:30:00Z"
               },
               "error": null
@@ -164,6 +172,8 @@ public class AdminWorkerController {
                 "skills": [],
                 "kycStatus": "NOT_STARTED",
                 "faceEnrollment": null,
+                "currentAddress": null,
+                "permanentAddress": null,
                 "createdAt": "2026-11-12T10:00:00Z"
               },
               "error": null
@@ -194,6 +204,8 @@ public class AdminWorkerController {
                 "skills": [],
                 "kycStatus": "VERIFIED",
                 "faceEnrollment": null,
+                "currentAddress": null,
+                "permanentAddress": null,
                 "createdAt": "2026-09-01T06:30:00Z"
               },
               "error": null
@@ -215,7 +227,11 @@ public class AdminWorkerController {
                     "status": "ACTIVE",
                     "kycStatus": "VERIFIED",
                     "hasProfilePhoto": true,
-                    "faceEnrolledAt": "2026-10-20T09:12:00Z"
+                    "faceEnrolledAt": "2026-10-20T09:12:00Z",
+                    "currentCity": "Gurugram",
+                    "currentState": "Haryana",
+                    "permanentCity": "Lucknow",
+                    "permanentState": "Uttar Pradesh"
                   },
                   {
                     "id": "d8b2f5e3-0a4c-4b5f-9d6e-2a3b4c5d6e7f",
@@ -227,7 +243,11 @@ public class AdminWorkerController {
                     "status": "REGISTERED",
                     "kycStatus": "NOT_STARTED",
                     "hasProfilePhoto": false,
-                    "faceEnrolledAt": null
+                    "faceEnrolledAt": null,
+                    "currentCity": null,
+                    "currentState": null,
+                    "permanentCity": null,
+                    "permanentState": null
                   }
                 ],
                 "page": 0,
@@ -364,6 +384,18 @@ public class AdminWorkerController {
                 "branchName": "Jaipur Civil Lines Branch",
                 "verified": false,
                 "verifiedAt": null
+              },
+              "error": null
+            }
+            """;
+
+    private static final String EX_BANK_CHECK = """
+            {
+              "success": true,
+              "data": {
+                "exists": true,
+                "nameMatched": true,
+                "nameAtBank": "Ramesh Kumar Sharma"
               },
               "error": null
             }
@@ -598,6 +630,8 @@ public class AdminWorkerController {
     @Parameter(name = "search", description = "Free-text match against first/last name, mobile number, worker code, and email.", example = "sharma")
     @Parameter(name = "registeredFrom", description = "Registered (created) on or after this date (UTC).", example = "2026-01-01")
     @Parameter(name = "registeredTo", description = "Registered (created) on or before this date (UTC).", example = "2026-12-31")
+    @Parameter(name = "stateId", description = "Filter by one or more state ids (Masterdata module) - matches a worker whose PERMANENT or CURRENT address references any of these.")
+    @Parameter(name = "cityId", description = "Filter by one or more city ids (Masterdata module) - matches a worker whose PERMANENT or CURRENT address references any of these.")
     @Parameter(name = "sort", description = "Allowed values: firstName, lastName, workerCode, mobileNumber, status, createdAt. Default: createdAt,desc.", example = "createdAt,desc")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Page of workers.",
             content = @Content(schema = @Schema(implementation = WorkerSummaryResponse.class),
@@ -616,9 +650,12 @@ public class AdminWorkerController {
             @RequestParam(required = false) String search,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate registeredFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate registeredTo,
+            @RequestParam(required = false) Set<UUID> stateId,
+            @RequestParam(required = false) Set<UUID> cityId,
             @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         WorkerSearchCriteria criteria = new WorkerSearchCriteria(
-                status, departmentId, industryId, designationId, skillId, kycStatus, search, registeredFrom, registeredTo);
+                status, departmentId, industryId, designationId, skillId, kycStatus, search, registeredFrom, registeredTo,
+                stateId, cityId);
         return ApiResponse.ok(workerService.list(criteria, pageable));
     }
 
@@ -825,7 +862,8 @@ public class AdminWorkerController {
             JSON envelope** - this is the only endpoint on this controller that doesn't return \
             `ApiResponse`. Columns, in order: Worker Code, First Name, Last Name, Mobile Number, Status, \
             KYC Status, Designation (primary designation's display name, blank if none), Department, \
-            Face Enrolled (`Yes`/`No`).
+            Current City, Current State, Permanent City, Permanent State (blank if that address/field \
+            isn't on file), Face Enrolled (`Yes`/`No`).
 
             Give `ids` for an exact set (unknown ids are silently skipped); otherwise every other field \
             is an optional filter with the **exact same semantics as List Workers above** (a non-empty \
@@ -841,7 +879,7 @@ public class AdminWorkerController {
     public ResponseEntity<byte[]> export(@RequestBody WorkerExportRequest request) {
         WorkerSearchCriteria criteria = new WorkerSearchCriteria(request.status(), request.departmentId(),
                 request.industryId(), request.designationId(), request.skillId(), request.kycStatus(), request.search(),
-                request.registeredFrom(), request.registeredTo());
+                request.registeredFrom(), request.registeredTo(), request.stateId(), request.cityId());
         byte[] csv = workerService.exportToCsv(request.ids(), criteria);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/csv"))
@@ -1077,6 +1115,28 @@ public class AdminWorkerController {
         return ApiResponse.ok(bankDetailService.verify(id));
     }
 
+    @Operation(summary = "Check a bank account (no worker required)", description = """
+            **Permission:** `workers.edit`.
+
+            Standalone, advisory-only check against the configured bank-verification provider (off by \
+            default - see `atw.bank-verification.provider`): confirms an account number + IFSC \
+            combination is real, and reports whether the bank's own name-at-account matches the given \
+            `accountHolderName` (case/whitespace-insensitive). No worker id is needed - useful during \
+            intake, before a worker record exists yet.
+
+            **Nothing is persisted by this call.** It does NOT set `verified`/`verifiedAt` on any \
+            worker's bank detail - that only ever happens via Verify Worker Bank Detail (above), once \
+            the worker and their bank detail row actually exist. Call that endpoint, not this one, to \
+            make a verification authoritative.""")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Check result (always 200 - a non-existent or mismatched account is a normal result, not an error).",
+            content = @Content(schema = @Schema(implementation = BankAccountCheckResponse.class),
+                    examples = @ExampleObject(value = EX_BANK_CHECK)))
+    @PostMapping("/bank-detail/check")
+    @PreAuthorize("@authz.has('workers.edit')")
+    public ApiResponse<BankAccountCheckResponse> checkBankAccount(@Valid @RequestBody CheckBankAccountRequest request) {
+        return ApiResponse.ok(bankDetailService.check(request.accountNumber(), request.ifscCode(), request.accountHolderName()));
+    }
+
     @Operation(summary = "Get a worker's statutory detail", description = """
             **Permission:** `workers.view`.
 
@@ -1135,7 +1195,8 @@ public class AdminWorkerController {
             **Permission:** `workers.view_comments` (a separate permission from `workers.view` - a \
             caller can see a worker's profile without seeing admin remarks about them, or vice versa).
 
-            Append-only admin remarks, newest first. There is no edit or delete endpoint for a note.""")
+            Admin remarks, newest first. There is no edit endpoint for a note, but it can be removed \
+            entirely - see Delete Worker Note below.""")
     @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Page of notes.",
             content = @Content(schema = @Schema(implementation = WorkerNoteResponse.class),
@@ -1152,7 +1213,8 @@ public class AdminWorkerController {
             **Permission:** `workers.edit` (note this is `.edit`, not `.view_comments` - reading notes \
             and adding one are gated by two different permissions).
 
-            Appends one append-only admin remark; there's no edit or delete for it afterward.""")
+            Appends one admin remark; there's no edit for it afterward, though it can be deleted - see \
+            Delete Worker Note below.""")
     @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Note created.",
             content = @Content(schema = @Schema(implementation = WorkerNoteResponse.class),
@@ -1163,6 +1225,27 @@ public class AdminWorkerController {
     @PreAuthorize("@authz.has('workers.edit')")
     public ApiResponse<WorkerNoteResponse> createNote(@PathVariable UUID id, @Valid @RequestBody CreateWorkerNoteRequest request) {
         return ApiResponse.ok(noteService.create(id, request));
+    }
+
+    @Operation(summary = "Delete a worker's note", description = """
+            **Permission:** `workers.delete_comments` - a third, dedicated permission, separate from \
+            both `workers.view_comments` (list) and `workers.edit` (create), since a caller trusted to \
+            read or add remarks isn't automatically trusted to remove one someone else wrote.
+
+            **Hard delete** - the note row is permanently removed, with no recovery (unlike `Worker`'s \
+            own soft-delete). Returns 404 if the note doesn't exist, or exists but belongs to a \
+            different worker than `id` names.""")
+    @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
+    @Parameter(name = "noteId", description = "Note id.", example = "a4b5c6d7-e8f9-4a1b-8c2d-3e4f5a6b7c8d")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Deleted - `data` is null.",
+            content = @Content(examples = @ExampleObject(value = "{\"success\": true, \"data\": null, \"error\": null}")))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown note id, or it belongs to a different worker.",
+            content = @Content(examples = @ExampleObject(value = EX_ERROR_NOT_FOUND)))
+    @DeleteMapping("/{id}/notes/{noteId}")
+    @PreAuthorize("@authz.has('workers.delete_comments')")
+    public ApiResponse<Void> deleteNote(@PathVariable UUID id, @PathVariable UUID noteId) {
+        noteService.delete(id, noteId);
+        return ApiResponse.ok();
     }
 
     private static byte[] readBytes(MultipartFile file) {

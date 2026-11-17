@@ -21,6 +21,7 @@ import in.anytimework.atwbackend.identity.application.AdminStaffAddressService;
 import in.anytimework.atwbackend.identity.application.AdminStaffBankDetailService;
 import in.anytimework.atwbackend.identity.application.AdminStaffKycService;
 import in.anytimework.atwbackend.identity.application.AdminStaffProfileService;
+import in.anytimework.atwbackend.identity.application.AdminStaffSearchCriteria;
 import in.anytimework.atwbackend.identity.application.AdminStaffService;
 import in.anytimework.atwbackend.identity.application.dto.AuthTokens;
 import in.anytimework.atwbackend.identity.application.dto.LoginResult;
@@ -35,6 +36,7 @@ import in.anytimework.atwbackend.masterdata.domain.CityRepository;
 import in.anytimework.atwbackend.masterdata.domain.State;
 import in.anytimework.atwbackend.masterdata.domain.StateRepository;
 import in.anytimework.atwbackend.notification.CapturingEmailSender;
+import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
@@ -47,6 +49,8 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -58,6 +62,7 @@ import org.springframework.test.context.ActiveProfiles;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -614,6 +619,121 @@ class AdminStaffRoleIntegrationTest {
 
         actingAs(self.id(), () -> assertThatThrownBy(() -> staffService.delete(self.id(), "127.0.0.1", "JUnit"))
                 .isInstanceOf(BusinessRuleException.class));
+    }
+
+    // ---- staff list: filters, search, sort ------------------------------------------------------
+
+    @Test
+    void staffList_statusFilterIsMultiselect_matchesAnySelectedValue() {
+        String prefix = "MultiStatus" + unique();
+        AdminStaffResponse active = createStaffAsSuperAdmin(prefix + " Active", List.of());
+        AdminStaffResponse disabled = createStaffAsSuperAdmin(prefix + " Disabled", List.of());
+        UUID actorId = createSuperAdminActor();
+        actingAs(actorId, () -> staffService.updateStatus(disabled.id(), AdminStatus.DISABLED, "127.0.0.1", "JUnit"));
+
+        PageResponse<AdminStaffResponse> result = staffService.list(
+                new AdminStaffSearchCriteria(Set.of(AdminStatus.ACTIVE, AdminStatus.DISABLED), null, null, prefix),
+                PageRequest.of(0, 50));
+
+        assertThat(result.content()).extracting(AdminStaffResponse::id)
+                .containsExactlyInAnyOrder(active.id(), disabled.id());
+    }
+
+    @Test
+    void staffList_statusFilter_excludesNonMatchingStatus() {
+        String prefix = "StatusOnly" + unique();
+        AdminStaffResponse active = createStaffAsSuperAdmin(prefix + " Active", List.of());
+        AdminStaffResponse disabled = createStaffAsSuperAdmin(prefix + " Disabled", List.of());
+        UUID actorId = createSuperAdminActor();
+        actingAs(actorId, () -> staffService.updateStatus(disabled.id(), AdminStatus.DISABLED, "127.0.0.1", "JUnit"));
+
+        PageResponse<AdminStaffResponse> disabledOnly = staffService.list(
+                new AdminStaffSearchCriteria(Set.of(AdminStatus.DISABLED), null, null, prefix),
+                PageRequest.of(0, 50));
+
+        assertThat(disabledOnly.content()).extracting(AdminStaffResponse::id).containsExactly(disabled.id());
+        assertThat(disabledOnly.content()).extracting(AdminStaffResponse::id).doesNotContain(active.id());
+    }
+
+    /**
+     * The critical regression this guards against: filtering by a {@code Set} of role ids via a
+     * naive {@code root.join("roles")} would duplicate a staff member's row once per matching role
+     * they hold, inflating {@code totalElements} and returning the same id twice. {@code roleA}/
+     * {@code roleB} are freshly created in this test, so they isolate this assertion from the shared
+     * test database's accumulated rows without needing a search term too.
+     */
+    @Test
+    void staffList_roleFilterIsMultiselect_doesNotDuplicateAStaffMemberHoldingBothSelectedRoles() {
+        AdminRoleResponse roleA = createRoleAsSuperAdmin("RoleA " + unique(), "d", List.of());
+        AdminRoleResponse roleB = createRoleAsSuperAdmin("RoleB " + unique(), "d", List.of());
+        AdminStaffResponse both = createStaffAsSuperAdmin("Both Roles " + unique(), List.of(roleA.id(), roleB.id()));
+        AdminStaffResponse onlyA = createStaffAsSuperAdmin("Only RoleA " + unique(), List.of(roleA.id()));
+        AdminStaffResponse neither = createStaffAsSuperAdmin("Neither Role " + unique(), List.of());
+
+        PageResponse<AdminStaffResponse> result = staffService.list(
+                new AdminStaffSearchCriteria(null, Set.of(roleA.id(), roleB.id()), null, null),
+                PageRequest.of(0, 50));
+
+        assertThat(result.content()).extracting(AdminStaffResponse::id)
+                .containsExactlyInAnyOrder(both.id(), onlyA.id());
+        assertThat(result.content()).extracting(AdminStaffResponse::id).doesNotContain(neither.id());
+        assertThat(result.totalElements()).isEqualTo(2);
+    }
+
+    @Test
+    void staffList_searchMatchesPartialNameAndPartialEmail() {
+        String marker = "Findstaff" + unique();
+        AdminStaffResponse staff = createStaffAsSuperAdmin(marker + " Person", List.of());
+
+        PageResponse<AdminStaffResponse> byName = staffService.list(
+                new AdminStaffSearchCriteria(null, null, null, marker), PageRequest.of(0, 20));
+        assertThat(byName.content()).extracting(AdminStaffResponse::id).contains(staff.id());
+
+        PageResponse<AdminStaffResponse> byEmail = staffService.list(
+                new AdminStaffSearchCriteria(null, null, null, staff.email().substring(0, 12)), PageRequest.of(0, 20));
+        assertThat(byEmail.content()).extracting(AdminStaffResponse::id).contains(staff.id());
+    }
+
+    @Test
+    void staffList_rejectsAnUnsortableField() {
+        assertThatThrownBy(() -> staffService.list(
+                new AdminStaffSearchCriteria(null, null, null, null),
+                PageRequest.of(0, 10, Sort.by("passwordHash"))))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("passwordHash");
+    }
+
+    // ---- role list: pagination, search, sort ------------------------------------------------------
+
+    @Test
+    void roleList_paginatesAndSearchesByPartialName() {
+        String marker = "Rolesearch" + unique();
+        AdminRoleResponse role = createRoleAsSuperAdmin(marker + " Role", "d", List.of());
+
+        PageResponse<AdminRoleResponse> result = roleService.list(marker, null, PageRequest.of(0, 20));
+
+        assertThat(result.content()).extracting(AdminRoleResponse::id).containsExactly(role.id());
+        assertThat(result.totalElements()).isEqualTo(1);
+        assertThat(result.page()).isEqualTo(0);
+    }
+
+    @Test
+    void roleList_filtersBySystemRoleFlag() {
+        String marker = "SysRoleFilter" + unique();
+        AdminRoleResponse role = createRoleAsSuperAdmin(marker + " Role", "d", List.of());
+
+        PageResponse<AdminRoleResponse> nonSystemOnly = roleService.list(marker, false, PageRequest.of(0, 20));
+        assertThat(nonSystemOnly.content()).extracting(AdminRoleResponse::id).containsExactly(role.id());
+
+        PageResponse<AdminRoleResponse> systemOnly = roleService.list(marker, true, PageRequest.of(0, 20));
+        assertThat(systemOnly.content()).isEmpty();
+    }
+
+    @Test
+    void roleList_rejectsAnUnsortableField() {
+        assertThatThrownBy(() -> roleService.list(null, null, PageRequest.of(0, 10, Sort.by("someUnknownField"))))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("someUnknownField");
     }
 
     private AuthTokens loginFully(AdminStaffResponse staff) {

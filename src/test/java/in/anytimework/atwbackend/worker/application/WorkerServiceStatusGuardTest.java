@@ -5,6 +5,7 @@ import in.anytimework.atwbackend.faceauth.application.FaceAuthService;
 import in.anytimework.atwbackend.kyc.application.KycService;
 import in.anytimework.atwbackend.masterdata.application.lookup.DepartmentLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.DesignationLookupService;
+import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.IndustryLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.SkillLookupService;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
@@ -12,6 +13,7 @@ import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import in.anytimework.atwbackend.worker.domain.Gender;
 import in.anytimework.atwbackend.worker.domain.Worker;
+import in.anytimework.atwbackend.worker.domain.WorkerAddressRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerDesignationRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerSkillRepository;
@@ -46,10 +48,12 @@ class WorkerServiceStatusGuardTest {
     private final WorkerDesignationRepository workerDesignations = mock(WorkerDesignationRepository.class);
     private final WorkerSkillRepository workerSkills = mock(WorkerSkillRepository.class);
     private final WorkerStatusHistoryRepository statusHistory = mock(WorkerStatusHistoryRepository.class);
+    private final WorkerAddressRepository workerAddresses = mock(WorkerAddressRepository.class);
     private final DepartmentLookupService departmentLookup = mock(DepartmentLookupService.class);
     private final IndustryLookupService industryLookup = mock(IndustryLookupService.class);
     private final DesignationLookupService designationLookup = mock(DesignationLookupService.class);
     private final SkillLookupService skillLookup = mock(SkillLookupService.class);
+    private final GeographyLookupService geography = mock(GeographyLookupService.class);
     private final KycService kycService = mock(KycService.class);
     private final FaceAuthService faceAuthService = mock(FaceAuthService.class);
     private final DocumentService documentService = mock(DocumentService.class);
@@ -61,9 +65,9 @@ class WorkerServiceStatusGuardTest {
             null, "9876543210", null, UUID.randomUUID(), null, null);
 
     private WorkerService service() {
-        return new WorkerService(workers, workerDesignations, workerSkills, statusHistory, departmentLookup,
-                industryLookup, designationLookup, skillLookup, kycService, faceAuthService, documentService, photoSupport,
-                currentAdmin, clock);
+        return new WorkerService(workers, workerDesignations, workerSkills, statusHistory, workerAddresses,
+                departmentLookup, industryLookup, designationLookup, skillLookup, geography, kycService,
+                faceAuthService, documentService, photoSupport, currentAdmin, clock);
     }
 
     private void stubExistingWorker() {

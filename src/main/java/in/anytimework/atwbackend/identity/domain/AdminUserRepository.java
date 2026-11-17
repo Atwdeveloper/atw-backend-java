@@ -2,6 +2,7 @@ package in.anytimework.atwbackend.identity.domain;
 
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -10,7 +11,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface AdminUserRepository extends JpaRepository<AdminUser, UUID> {
+public interface AdminUserRepository extends JpaRepository<AdminUser, UUID>, JpaSpecificationExecutor<AdminUser> {
 
     Optional<AdminUser> findByUsernameIgnoreCaseOrEmailIgnoreCase(String username, String email);
 

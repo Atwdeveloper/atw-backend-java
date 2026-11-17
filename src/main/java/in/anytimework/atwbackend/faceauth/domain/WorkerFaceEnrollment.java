@@ -60,6 +60,18 @@ public class WorkerFaceEnrollment extends BaseEntity {
     @Column(name = "consent_ip", length = 45)
     private String consentIp;
 
+    /**
+     * Set once this worker becomes ineligible to ever come up as a match again (today: worker
+     * soft-delete, via {@code WorkerService.delete} calling {@code FaceAuthService.excludeFromMatching}
+     * - see that method's Javadoc for why this is how faceauth learns about it, rather than asking
+     * {@code worker} at match time). {@code null} means still eligible. Deliberately does NOT delete
+     * the row - the template is preserved for audit/reconciliation, same as every other worker
+     * satellite table on a soft-delete; it is simply excluded from the candidate set {@code identify}/
+     * the enrollment-time duplicate check compare against.
+     */
+    @Column(name = "excluded_from_matching_at")
+    private Instant excludedFromMatchingAt;
+
     protected WorkerFaceEnrollment() {
         // required by JPA
     }
@@ -81,5 +93,10 @@ public class WorkerFaceEnrollment extends BaseEntity {
         this.enrolledAt = enrolledAt;
         this.consentGivenAt = consentGivenAt;
         this.consentIp = consentIp;
+    }
+
+    /** Idempotent - calling this again on an already-excluded row just overwrites the timestamp. */
+    public void excludeFromMatching(Instant excludedAt) {
+        this.excludedFromMatchingAt = excludedAt;
     }
 }

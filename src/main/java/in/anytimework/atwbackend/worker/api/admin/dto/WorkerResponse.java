@@ -55,6 +55,12 @@ public record WorkerResponse(
                 + "a short-lived signed photo URL when enrolled; not editable through this controller. "
                 + "FaceEnrollmentDto = {workerId, enrolled, enrolledAt, livenessConfidence, photoUrl}.",
                 nullable = true) FaceEnrollmentDto faceEnrollment,
+        @Schema(description = "The worker's CURRENT (working) address, resolved for display - null if "
+                + "none has been saved yet. Read-only here; edit via PUT /{id}/address/CURRENT.",
+                nullable = true) WorkerAddressView currentAddress,
+        @Schema(description = "The worker's PERMANENT (home) address, resolved for display - null if "
+                + "none has been saved yet. Read-only here; edit via PUT /{id}/address/PERMANENT.",
+                nullable = true) WorkerAddressView permanentAddress,
         Instant createdAt
 ) {
 }

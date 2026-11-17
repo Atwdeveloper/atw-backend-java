@@ -6,13 +6,16 @@ import in.anytimework.atwbackend.faceauth.application.dto.FaceEnrollmentDto;
 import in.anytimework.atwbackend.kyc.application.KycService;
 import in.anytimework.atwbackend.kyc.application.KycStatus;
 import in.anytimework.atwbackend.kyc.application.KycVerificationCompletionResult;
+import in.anytimework.atwbackend.masterdata.application.lookup.CitySummary;
 import in.anytimework.atwbackend.masterdata.application.lookup.DepartmentLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.DepartmentSummary;
 import in.anytimework.atwbackend.masterdata.application.lookup.DesignationLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.DesignationSummary;
+import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.IndustryLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.SkillLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.SkillSummary;
+import in.anytimework.atwbackend.masterdata.application.lookup.StateSummary;
 import in.anytimework.atwbackend.shared.api.BulkActionFailure;
 import in.anytimework.atwbackend.shared.api.BulkActionResult;
 import in.anytimework.atwbackend.shared.api.PageResponse;
@@ -20,6 +23,7 @@ import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.kernel.Address;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
 import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
@@ -27,12 +31,16 @@ import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerDesignationsRe
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerSkillsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.WorkerAddressView;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerDesignationRef;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerSkillRef;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerStatusHistoryResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerSummaryResponse;
+import in.anytimework.atwbackend.worker.domain.AddressType;
 import in.anytimework.atwbackend.worker.domain.Worker;
+import in.anytimework.atwbackend.worker.domain.WorkerAddress;
+import in.anytimework.atwbackend.worker.domain.WorkerAddressRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerDesignation;
 import in.anytimework.atwbackend.worker.domain.WorkerDesignationRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerRepository;
@@ -55,11 +63,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -81,7 +92,8 @@ public class WorkerService {
     private static final Set<WorkerStatus> NOT_DIRECTLY_SETTABLE =
             EnumSet.of(WorkerStatus.REGISTERED, WorkerStatus.KYC_PENDING);
     private static final String[] CSV_HEADER = {
-            "Worker Code", "First Name", "Last Name", "Mobile Number", "Status", "KYC Status", "Designation", "Department", "Face Enrolled"
+            "Worker Code", "First Name", "Last Name", "Mobile Number", "Status", "KYC Status", "Designation", "Department",
+            "Current City", "Current State", "Permanent City", "Permanent State", "Face Enrolled"
     };
     /**
      * Real, directly queryable scalar columns only - see {@link SortValidation}'s Javadoc for why.
@@ -97,10 +109,12 @@ public class WorkerService {
     private final WorkerDesignationRepository workerDesignations;
     private final WorkerSkillRepository workerSkills;
     private final WorkerStatusHistoryRepository statusHistory;
+    private final WorkerAddressRepository workerAddresses;
     private final DepartmentLookupService departmentLookup;
     private final IndustryLookupService industryLookup;
     private final DesignationLookupService designationLookup;
     private final SkillLookupService skillLookup;
+    private final GeographyLookupService geography;
     private final KycService kycService;
     private final FaceAuthService faceAuthService;
     private final DocumentService documentService;
@@ -110,18 +124,21 @@ public class WorkerService {
 
     public WorkerService(WorkerRepository workers, WorkerDesignationRepository workerDesignations,
                          WorkerSkillRepository workerSkills, WorkerStatusHistoryRepository statusHistory,
-                         DepartmentLookupService departmentLookup, IndustryLookupService industryLookup,
-                         DesignationLookupService designationLookup, SkillLookupService skillLookup,
-                         KycService kycService, FaceAuthService faceAuthService, DocumentService documentService,
+                         WorkerAddressRepository workerAddresses, DepartmentLookupService departmentLookup,
+                         IndustryLookupService industryLookup, DesignationLookupService designationLookup,
+                         SkillLookupService skillLookup, GeographyLookupService geography, KycService kycService,
+                         FaceAuthService faceAuthService, DocumentService documentService,
                          WorkerProfilePhotoSupport photoSupport, CurrentAdmin currentAdmin, Clock clock) {
         this.workers = workers;
         this.workerDesignations = workerDesignations;
         this.workerSkills = workerSkills;
         this.statusHistory = statusHistory;
+        this.workerAddresses = workerAddresses;
         this.departmentLookup = departmentLookup;
         this.industryLookup = industryLookup;
         this.designationLookup = designationLookup;
         this.skillLookup = skillLookup;
+        this.geography = geography;
         this.kycService = kycService;
         this.faceAuthService = faceAuthService;
         this.documentService = documentService;
@@ -193,6 +210,12 @@ public class WorkerService {
         }
         if (criteria.registeredFrom() != null || criteria.registeredTo() != null) {
             predicates.add(WorkerSpecifications.registeredBetween(criteria.registeredFrom(), criteria.registeredTo()));
+        }
+        if (criteria.stateId() != null && !criteria.stateId().isEmpty()) {
+            predicates.add(WorkerSpecifications.hasState(criteria.stateId()));
+        }
+        if (criteria.cityId() != null && !criteria.cityId().isEmpty()) {
+            predicates.add(WorkerSpecifications.hasCity(criteria.cityId()));
         }
         if (criteria.kycStatus() != null && !criteria.kycStatus().isEmpty()) {
             Set<UUID> matchingWorkerIds = kycService.findWorkerIdsByStatus(criteria.kycStatus());
@@ -378,7 +401,10 @@ public class WorkerService {
      * {@code V23__kyc.sql}/{@code V25__faceauth.sql}, simply never fire via this path anymore). The
      * worker's mobile number becomes available again for a new worker to register with - a deliberate
      * product decision, see {@code V27__worker_soft_delete.sql}'s partial unique index, not an
-     * oversight.</p>
+     * oversight. The one exception to "untouched": the face-enrollment row (if any) is marked
+     * excluded-from-matching (see {@link FaceAuthService#excludeFromMatching}) - the row and its photo
+     * are still preserved, only its future eligibility as an identify/duplicate-check match result
+     * changes, added 2026-11-17 once those matching features existed to need it.</p>
      *
      * <p>Still refused unless the worker's current status is something other than ACTIVE - the caller
      * must change status first (e.g. to INACTIVE) via the already-guarded {@link #updateStatus}/
@@ -398,6 +424,10 @@ public class WorkerService {
         }
         worker.markDeleted(clock.instant());
         workers.save(worker);
+        // The face-biometric enrollment row itself is untouched (see this method's own Javadoc on why
+        // every satellite row is preserved) - this only stops it from ever surfacing as a future
+        // identify/duplicate-check match. A no-op if nothing was enrolled.
+        faceAuthService.excludeFromMatching(id);
     }
 
     /**
@@ -459,6 +489,7 @@ public class WorkerService {
         Map<UUID, String> departmentNameById = departmentNameById();
         Map<UUID, KycStatus> kycStatusByWorker = kycService.getStatuses(workerIds);
         Map<UUID, Instant> faceEnrolledAtByWorker = faceAuthService.getEnrollmentDates(workerIds);
+        WorkerAddressNames addressNames = addressNamesByWorker(workerIds);
 
         StringBuilder csv = new StringBuilder();
         csv.append(String.join(",", CSV_HEADER)).append("\r\n");
@@ -476,6 +507,10 @@ public class WorkerService {
                     .append(csvField(kycStatus.name())).append(',')
                     .append(csvField(designationName)).append(',')
                     .append(csvField(departmentName)).append(',')
+                    .append(csvField(addressNames.currentCity().get(w.getId()))).append(',')
+                    .append(csvField(addressNames.currentState().get(w.getId()))).append(',')
+                    .append(csvField(addressNames.permanentCity().get(w.getId()))).append(',')
+                    .append(csvField(addressNames.permanentState().get(w.getId()))).append(',')
                     .append(csvField(faceEnrolled ? "Yes" : "No")).append("\r\n");
         }
         return csv.toString().getBytes(StandardCharsets.UTF_8);
@@ -627,6 +662,7 @@ public class WorkerService {
         Map<UUID, String> designationNameById = designationNameById();
         Map<UUID, KycStatus> kycStatusByWorker = kycService.getStatuses(workerIds);
         Map<UUID, Instant> faceEnrolledAtByWorker = faceAuthService.getEnrollmentDates(workerIds);
+        WorkerAddressNames addressNames = addressNamesByWorker(workerIds);
 
         return workerList.stream().map(w -> {
             UUID primaryDesignationId = primaryDesignationIdByWorker.get(w.getId());
@@ -634,8 +670,68 @@ public class WorkerService {
             return new WorkerSummaryResponse(w.getId(), w.getWorkerCode(), w.getFirstName(), w.getLastName(),
                     w.getMobileNumber(), primaryDesignationName, w.getStatus(),
                     kycStatusByWorker.getOrDefault(w.getId(), KycStatus.NOT_STARTED),
-                    w.getProfilePhotoDocumentId() != null, faceEnrolledAtByWorker.get(w.getId()));
+                    w.getProfilePhotoDocumentId() != null, faceEnrolledAtByWorker.get(w.getId()),
+                    addressNames.currentCity().get(w.getId()), addressNames.currentState().get(w.getId()),
+                    addressNames.permanentCity().get(w.getId()), addressNames.permanentState().get(w.getId()));
         }).toList();
+    }
+
+    /**
+     * Batch-loaded (one query for the whole page/export, never per row) city/state **names** for
+     * both address types, keyed by worker id - mirrors {@link #primaryDesignationIdByWorker}/
+     * {@link #designationNameById}'s two-step shape (ids for the page, then names for just the ids
+     * actually used). Unlike {@link #departmentNameById()}/{@link #designationNameById()}, city
+     * names are NOT resolved by loading the full masterdata list - see
+     * {@link GeographyLookupService#listCitiesByIds}'s Javadoc for why cities don't get that
+     * shortcut the way small reference lists (departments, designations, states) do.
+     */
+    private record WorkerAddressNames(Map<UUID, String> currentCity, Map<UUID, String> currentState,
+                                       Map<UUID, String> permanentCity, Map<UUID, String> permanentState) {
+    }
+
+    private WorkerAddressNames addressNamesByWorker(Set<UUID> workerIds) {
+        if (workerIds.isEmpty()) {
+            return new WorkerAddressNames(Map.of(), Map.of(), Map.of(), Map.of());
+        }
+        List<WorkerAddress> addresses = workerAddresses.findByWorkerIdIn(workerIds);
+        Set<UUID> cityIds = new HashSet<>();
+        Set<UUID> stateIds = new HashSet<>();
+        for (WorkerAddress a : addresses) {
+            if (a.getAddress().getCityId() != null) {
+                cityIds.add(a.getAddress().getCityId());
+            }
+            if (a.getAddress().getStateId() != null) {
+                stateIds.add(a.getAddress().getStateId());
+            }
+        }
+        Map<UUID, String> cityNameById = geography.listCitiesByIds(cityIds).stream()
+                .collect(Collectors.toMap(CitySummary::id, CitySummary::name));
+        Map<UUID, String> stateNameById = geography.listStates().stream()
+                .filter(s -> stateIds.contains(s.id()))
+                .collect(Collectors.toMap(StateSummary::id, StateSummary::name));
+
+        return new WorkerAddressNames(
+                resolveAddressNames(addresses, AddressType.CURRENT, Address::getCityId, cityNameById),
+                resolveAddressNames(addresses, AddressType.CURRENT, Address::getStateId, stateNameById),
+                resolveAddressNames(addresses, AddressType.PERMANENT, Address::getCityId, cityNameById),
+                resolveAddressNames(addresses, AddressType.PERMANENT, Address::getStateId, stateNameById));
+    }
+
+    /** Plain mutable map + explicit put, not {@code Collectors.toMap} - {@code Map.merge} (which toMap uses internally) throws NPE on a null value, and an unresolved/not-yet-set city or state id is exactly that: a legitimate null to skip, not an error. */
+    private static Map<UUID, String> resolveAddressNames(List<WorkerAddress> addresses, AddressType type,
+                                                          Function<Address, UUID> refIdOf, Map<UUID, String> nameById) {
+        Map<UUID, String> result = new HashMap<>();
+        for (WorkerAddress a : addresses) {
+            if (a.getAddressType() != type) {
+                continue;
+            }
+            UUID refId = refIdOf.apply(a.getAddress());
+            String name = refId == null ? null : nameById.get(refId);
+            if (name != null) {
+                result.put(a.getWorkerId(), name);
+            }
+        }
+        return result;
     }
 
     /** Batch-loaded (one query for the whole page/export, never per row) - worker id -> its primary designation id. */
@@ -670,12 +766,33 @@ public class WorkerService {
                 : documentService.generateDownloadUrl(worker.getProfilePhotoDocumentId(), PHOTO_URL_VALIDITY).toString();
         KycStatus kycStatus = kycService.getStatus(worker.getId());
         FaceEnrollmentDto faceEnrollment = faceAuthService.getEnrollment(worker.getId());
+        WorkerAddressView currentAddress = addressView(worker.getId(), AddressType.CURRENT);
+        WorkerAddressView permanentAddress = addressView(worker.getId(), AddressType.PERMANENT);
 
         return new WorkerResponse(worker.getId(), worker.getWorkerCode(), worker.getFirstName(), worker.getMiddleName(),
                 worker.getLastName(), worker.getFatherName(), worker.getGender(), worker.getDateOfBirth(),
                 worker.getMobileNumber(), worker.getPersonalEmail(), worker.getDepartmentId(), worker.getIndustryId(),
                 worker.getWorkExperienceYears(), worker.getStatus(),
                 worker.getStatusReason(), photoUrl, designationRefs, skillRefs, kycStatus, faceEnrollment,
-                worker.getCreatedAt());
+                currentAddress, permanentAddress, worker.getCreatedAt());
+    }
+
+    /**
+     * Single-worker resolution (at most 2 extra single-row queries, called once per GET - never per
+     * list row, same cost tier as this method's other per-worker lookups like
+     * {@code workerDesignations.findByWorkerId}) - the batch counterpart for a whole list/export page
+     * is {@link #addressNamesByWorker}, not this.
+     */
+    private WorkerAddressView addressView(UUID workerId, AddressType type) {
+        return workerAddresses.findByWorkerIdAndAddressType(workerId, type).map(a -> {
+            Address address = a.getAddress();
+            String city = address.getCityId() == null ? null
+                    : geography.listCitiesByIds(Set.of(address.getCityId())).stream()
+                            .findFirst().map(CitySummary::name).orElse(null);
+            String state = address.getStateId() == null ? null
+                    : geography.listStates().stream().filter(s -> s.id().equals(address.getStateId()))
+                            .findFirst().map(StateSummary::name).orElse(null);
+            return new WorkerAddressView(address.getLine1(), address.getLine2(), city, state, address.getPincode());
+        }).orElse(null);
     }
 }

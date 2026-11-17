@@ -20,17 +20,21 @@ import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.persistence.SortValidation;
+import in.anytimework.atwbackend.shared.persistence.Specifications;
 import in.anytimework.atwbackend.shared.security.OpaqueTokens;
 import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -49,6 +53,8 @@ import java.util.stream.Collectors;
 public class AdminStaffService {
 
     private static final String INVITE_TEMPLATE = "ADMIN_STAFF_INVITE";
+    /** Real, directly queryable scalar columns only - see {@link SortValidation}'s Javadoc for why. */
+    private static final Set<String> ALLOWED_SORT = Set.of("fullName", "email", "username", "createdAt", "lastLoginAt", "status");
 
     private final AdminUserRepository adminUsers;
     private final AdminRoleRepository roles;
@@ -84,9 +90,35 @@ public class AdminStaffService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<AdminStaffResponse> list(Pageable pageable) {
-        Page<AdminStaffResponse> page = adminUsers.findAll(pageable).map(this::toDto);
-        return PageResponse.from(page);
+    public PageResponse<AdminStaffResponse> list(AdminStaffSearchCriteria criteria, Pageable pageable) {
+        SortValidation.assertSortable(pageable, ALLOWED_SORT);
+        List<Specification<AdminUser>> predicates = buildPredicates(criteria);
+        Page<AdminUser> page = adminUsers.findAll(Specifications.allOf(predicates), pageable);
+        return PageResponse.from(page.map(this::toDto));
+    }
+
+    /**
+     * Builds one {@link Specification} per non-empty {@link AdminStaffSearchCriteria} field, ANDed
+     * together by {@link Specifications#allOf} - mirrors {@code WorkerService.buildPredicates}'s
+     * exact shape. Unlike {@code WorkerService}'s KYC-status filter (a cross-module id lookup that
+     * can short-circuit to "no results"), every filter here is a direct column/subquery on
+     * {@link AdminUser} itself, so there's no empty-predicates-means-zero-results case to special-case.
+     */
+    private List<Specification<AdminUser>> buildPredicates(AdminStaffSearchCriteria criteria) {
+        List<Specification<AdminUser>> predicates = new ArrayList<>();
+        if (criteria.statuses() != null && !criteria.statuses().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasStatus(criteria.statuses()));
+        }
+        if (criteria.roleIds() != null && !criteria.roleIds().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasRole(criteria.roleIds()));
+        }
+        if (criteria.superAdmin() != null) {
+            predicates.add(AdminStaffSpecifications.isSuperAdmin(criteria.superAdmin()));
+        }
+        if (StringUtils.hasText(criteria.search())) {
+            predicates.add(AdminStaffSpecifications.matchesSearch(criteria.search()));
+        }
+        return predicates;
     }
 
     @Transactional(readOnly = true)

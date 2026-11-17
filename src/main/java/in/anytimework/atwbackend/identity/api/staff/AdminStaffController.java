@@ -16,7 +16,9 @@ import in.anytimework.atwbackend.identity.application.AdminStaffAddressService;
 import in.anytimework.atwbackend.identity.application.AdminStaffBankDetailService;
 import in.anytimework.atwbackend.identity.application.AdminStaffKycService;
 import in.anytimework.atwbackend.identity.application.AdminStaffProfileService;
+import in.anytimework.atwbackend.identity.application.AdminStaffSearchCriteria;
 import in.anytimework.atwbackend.identity.application.AdminStaffService;
+import in.anytimework.atwbackend.identity.domain.AdminStatus;
 import in.anytimework.atwbackend.shared.api.ApiResponse;
 import in.anytimework.atwbackend.shared.api.ApiVersions;
 import in.anytimework.atwbackend.shared.api.PageResponse;
@@ -38,8 +40,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -95,9 +99,19 @@ public class AdminStaffController {
             description = "Standard Spring pagination via query params: `page` (0-based, default `0`), `size` "
                     + "(default `100`, capped at `500` - set application-wide by "
                     + "`spring.data.web.pageable.default-page-size`/`max-page-size` in `application.properties`, "
-                    + "not something this endpoint overrides), `sort` (e.g. `sort=fullName,asc`). Returns a "
-                    + "`PageResponse<AdminStaffResponse>`. KYC/bank fields are **not** included here - fetch them "
-                    + "per-staff-member via the sub-resource endpoints below.")
+                    + "not something this endpoint overrides), `sort` (allowed values: fullName, email, username, "
+                    + "createdAt, lastLoginAt, status - e.g. `sort=fullName,asc`; anything else is rejected with "
+                    + "`400 VALIDATION_ERROR`). Returns a `PageResponse<AdminStaffResponse>`. KYC/bank fields are "
+                    + "**not** included here - fetch them per-staff-member via the sub-resource endpoints below."
+                    + "\n\n**Filters** (all optional, ANDed together; `status`/`roleId` are multiselect - repeat the "
+                    + "param for an OR within that field, e.g. `status=ACTIVE&status=DISABLED`): `status` (`ACTIVE`/"
+                    + "`DISABLED`), `roleId` (matches a staff member holding ANY of the given role ids), "
+                    + "`superAdmin` (`true`/`false`, exact match), `search` (free-text, case-insensitive partial "
+                    + "match against full name, email, username, and phone).")
+    @Parameter(name = "status", description = "Filter by one or more statuses.", example = "ACTIVE")
+    @Parameter(name = "roleId", description = "Filter by one or more role ids - matches a staff member holding ANY of them.")
+    @Parameter(name = "superAdmin", description = "Filter to only super-admin accounts (true) or only non-super-admin accounts (false).")
+    @Parameter(name = "search", description = "Free-text match against full name, email, username, and phone.", example = "sharma")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "A page of staff accounts.",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -141,8 +155,13 @@ public class AdminStaffController {
                               }
                             }""")))
     })
-    public ApiResponse<PageResponse<AdminStaffResponse>> list(Pageable pageable) {
-        return ApiResponse.ok(staffService.list(pageable));
+    public ApiResponse<PageResponse<AdminStaffResponse>> list(
+            @RequestParam(required = false) Set<AdminStatus> status,
+            @RequestParam(required = false) Set<UUID> roleId,
+            @RequestParam(required = false) Boolean superAdmin,
+            @RequestParam(required = false) String search,
+            Pageable pageable) {
+        return ApiResponse.ok(staffService.list(new AdminStaffSearchCriteria(status, roleId, superAdmin, search), pageable));
     }
 
     @GetMapping("/{id}")
