@@ -5,6 +5,7 @@ import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.security.PermissionChecker;
 import in.anytimework.atwbackend.shared.security.PiiMasking;
+import in.anytimework.atwbackend.worker.api.admin.dto.BankAccountCheckResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerBankDetailRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerBankDetailResponse;
 import in.anytimework.atwbackend.worker.domain.WorkerBankDetail;
@@ -65,13 +66,10 @@ public class WorkerBankDetailService {
 
     /**
      * Calls the configured {@link BankVerificationPort} with the account/IFSC already on file and
-     * applies this codebase's match policy: the provider must confirm the account exists, and if it
-     * returns a name-at-account at all, that name must reasonably match (case/whitespace-insensitive)
-     * the worker's declared {@code accountHolderName}. A provider that doesn't return a name (e.g. the
-     * default stub) skips the name check entirely rather than blocking on it. Nothing is persisted
-     * unless both checks pass - {@code verified}/{@code verifiedAt} are never settable any other way,
-     * closing a gap the legacy app had (it let a client set its equivalent flag directly, bypassing
-     * any real vendor check).
+     * applies this codebase's match policy (see {@link #check}). Nothing is persisted unless both
+     * checks pass - {@code verified}/{@code verifiedAt} are never settable any other way, closing a
+     * gap the legacy app had (it let a client set its equivalent flag directly, bypassing any real
+     * vendor check).
      */
     @Transactional
     public WorkerBankDetailResponse verify(UUID workerId) {
@@ -79,12 +77,12 @@ public class WorkerBankDetailService {
         WorkerBankDetail detail = bankDetails.findByWorkerId(workerId)
                 .orElseThrow(() -> new BusinessRuleException("No bank details on file for this worker yet."));
 
-        BankVerificationResult result = bankVerificationPort.verify(detail.getAccountNumber(), detail.getIfscCode());
+        BankAccountCheckResponse result = check(detail.getAccountNumber(), detail.getIfscCode(), detail.getAccountHolderName());
         if (!result.exists()) {
             throw new BusinessRuleException(
                     "The bank could not confirm this account - please re-check the account number and IFSC code.");
         }
-        if (result.nameAtBank() != null && !namesMatch(detail.getAccountHolderName(), result.nameAtBank())) {
+        if (!result.nameMatched()) {
             throw new ConflictException(
                     "The bank's name on this account does not match the declared account holder name - "
                             + "please correct it and try again.");
@@ -93,6 +91,25 @@ public class WorkerBankDetailService {
         detail.markVerified(clock.instant());
         detail = bankDetails.save(detail);
         return toDto(detail);
+    }
+
+    /**
+     * Standalone, worker-independent check against the configured {@link BankVerificationPort} -
+     * nothing is persisted, and no worker needs to exist yet (useful during intake, before a worker
+     * record exists - see {@code AdminWorkerController.checkBankAccount}). Applies this codebase's
+     * match policy: the provider must confirm the account exists, and if it returns a name-at-account
+     * at all, that name must reasonably match (case/whitespace-insensitive) {@code accountHolderName}.
+     * A provider that doesn't return a name (e.g. the default stub) skips the name check entirely
+     * rather than blocking on it. Shared by {@link #verify} (which re-runs this against the already-
+     * persisted row, then - and only then - sets {@code verified}/{@code verifiedAt}) so the match
+     * policy is defined in exactly one place.
+     */
+    @Transactional(readOnly = true)
+    public BankAccountCheckResponse check(String accountNumber, String ifscCode, String accountHolderName) {
+        BankVerificationResult result = bankVerificationPort.verify(accountNumber, ifscCode);
+        boolean nameMatched = result.exists()
+                && (result.nameAtBank() == null || namesMatch(accountHolderName, result.nameAtBank()));
+        return new BankAccountCheckResponse(result.exists(), nameMatched, result.nameAtBank());
     }
 
     private static boolean namesMatch(String declared, String atBank) {

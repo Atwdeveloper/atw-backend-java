@@ -13,7 +13,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
-/** Append-only admin remarks about a worker - covers the pre-seeded {@code workers.view_comments} permission. */
+/**
+ * Admin remarks about a worker - never editable after creation, but deletable (hard delete, see
+ * {@link #delete}) by a holder of the dedicated {@code workers.delete_comments} permission. Reading
+ * and creating are covered by the pre-seeded {@code workers.view_comments}/{@code workers.edit}.
+ */
 @Service
 public class WorkerNoteService {
 
@@ -35,6 +39,19 @@ public class WorkerNoteService {
     public WorkerNoteResponse create(UUID workerId, CreateWorkerNoteRequest request) {
         requireWorkerExists(workerId);
         return toDto(notes.save(new WorkerNote(workerId, request.note())));
+    }
+
+    /**
+     * Hard delete - the row is permanently removed, no recovery (a deliberate choice for this
+     * feature, unlike {@code Worker}'s own soft-delete - see {@code AdminWorkerController.deleteNote}'s
+     * Javadoc). Throws {@link ResourceNotFoundException} if the note doesn't exist, or exists but
+     * belongs to a different worker than {@code workerId} names.
+     */
+    @Transactional
+    public void delete(UUID workerId, UUID noteId) {
+        WorkerNote note = notes.findByIdAndWorkerId(noteId, workerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Note not found"));
+        notes.delete(note);
     }
 
     private void requireWorkerExists(UUID workerId) {

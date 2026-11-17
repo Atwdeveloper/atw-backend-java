@@ -14,7 +14,9 @@ import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupSe
 import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
+import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.worker.api.admin.dto.BankAccountCheckResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerNoteRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.SubmitWorkerEsicRequest;
@@ -169,6 +171,38 @@ class WorkerSatelliteServicesIntegrationTest {
     }
 
     @Test
+    void notes_delete_removesItPermanently() {
+        UUID workerId = createWorker();
+        WorkerNoteResponse note = noteService.create(workerId, new CreateWorkerNoteRequest("To be deleted"));
+
+        noteService.delete(workerId, note.id());
+
+        PageResponse<WorkerNoteResponse> notes = noteService.list(workerId, PageRequest.of(0, 10));
+        assertThat(notes.content()).extracting(WorkerNoteResponse::id).doesNotContain(note.id());
+    }
+
+    @Test
+    void notes_delete_withNoteBelongingToADifferentWorker_isRejected() {
+        UUID workerId = createWorker();
+        UUID otherWorkerId = createWorker();
+        WorkerNoteResponse note = noteService.create(workerId, new CreateWorkerNoteRequest("Belongs to workerId"));
+
+        assertThatThrownBy(() -> noteService.delete(otherWorkerId, note.id()))
+                .isInstanceOf(ResourceNotFoundException.class);
+        // Untouched - the mismatched-worker delete above must not have removed it.
+        PageResponse<WorkerNoteResponse> notes = noteService.list(workerId, PageRequest.of(0, 10));
+        assertThat(notes.content()).extracting(WorkerNoteResponse::id).contains(note.id());
+    }
+
+    @Test
+    void notes_delete_withUnknownNoteId_isRejected() {
+        UUID workerId = createWorker();
+
+        assertThatThrownBy(() -> noteService.delete(workerId, UUID.randomUUID()))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
     void bankDetail_verify_withTheDefaultStubProvider_marksVerified() {
         UUID workerId = createWorker();
         bankDetailService.update(workerId,
@@ -185,6 +219,28 @@ class WorkerSatelliteServicesIntegrationTest {
         UUID workerId = createWorker();
 
         assertThatThrownBy(() -> bankDetailService.verify(workerId)).isInstanceOf(BusinessRuleException.class);
+    }
+
+    @Test
+    void bankDetail_check_withTheDefaultStubProvider_reportsExistsAndNameMatchedButPersistsNothing() {
+        // No worker created at all - this is the point of the standalone check: it needs no workerId.
+        BankAccountCheckResponse result = bankDetailService.check("31234567890", "SBIN0001234", "Ramesh Kumar");
+
+        assertThat(result.exists()).isTrue();
+        assertThat(result.nameMatched()).isTrue();
+    }
+
+    @Test
+    void bankDetail_check_doesNotMarkAnyExistingWorkersBankDetailAsVerified() {
+        UUID workerId = createWorker();
+        bankDetailService.update(workerId,
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
+
+        bankDetailService.check("31234567890", "SBIN0001234", "Ramesh Kumar");
+
+        WorkerBankDetailResponse unchanged = bankDetailService.get(workerId);
+        assertThat(unchanged.verified()).isFalse();
+        assertThat(unchanged.verifiedAt()).isNull();
     }
 
     @Test

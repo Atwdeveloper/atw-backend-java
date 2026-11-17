@@ -34,6 +34,10 @@ public record WorkerExportRequest(
         @Schema(description = "Registered (created) on or after this date (UTC).", nullable = true,
                 example = "2026-01-01") LocalDate registeredFrom,
         @Schema(description = "Registered (created) on or before this date (UTC).", nullable = true,
-                example = "2026-12-31") LocalDate registeredTo
+                example = "2026-12-31") LocalDate registeredTo,
+        @Schema(description = "State ids (Masterdata module). Matches a worker whose PERMANENT or "
+                + "CURRENT address references any of these.", nullable = true) Set<UUID> stateId,
+        @Schema(description = "City ids (Masterdata module). Matches a worker whose PERMANENT or "
+                + "CURRENT address references any of these.", nullable = true) Set<UUID> cityId
 ) {
 }

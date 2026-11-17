@@ -15,7 +15,8 @@ import java.util.UUID;
  * that would be an N+1 Azure Blob call per row).
  */
 @Schema(description = "One row of the worker list/export. Lighter than WorkerResponse: no signed "
-        + "photo URL, no full faceEnrollment object, no address/bank detail.")
+        + "photo URL, no full faceEnrollment object, no full address (city/state names only, see "
+        + "GET /{id} for the full address) - and no bank detail at all.")
 public record WorkerSummaryResponse(
         @Schema(example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e") UUID id,
         @Schema(example = "WRK0000042") String workerCode,
@@ -31,6 +32,14 @@ public record WorkerSummaryResponse(
                 + "only ever returned by GET /{id}, never in this list view.") boolean hasProfilePhoto,
         @Schema(description = "Null = not enrolled in face biometric auth. A non-null value is the "
                 + "instant enrollment completed - never the signed enrollment photo itself (see "
-                + "WorkerResponse.faceEnrollment for that).", nullable = true) Instant faceEnrolledAt
+                + "WorkerResponse.faceEnrollment for that).", nullable = true) Instant faceEnrolledAt,
+        @Schema(description = "City name of the worker's CURRENT address, or null if none is on file. "
+                + "Display only - filter by cityId, not this name.", nullable = true, example = "Jaipur") String currentCity,
+        @Schema(description = "State name of the worker's CURRENT address, or null if none is on file.",
+                nullable = true, example = "Rajasthan") String currentState,
+        @Schema(description = "City name of the worker's PERMANENT address, or null if none is on file.",
+                nullable = true, example = "Lucknow") String permanentCity,
+        @Schema(description = "State name of the worker's PERMANENT address, or null if none is on file.",
+                nullable = true, example = "Uttar Pradesh") String permanentState
 ) {
 }

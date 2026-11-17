@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -30,6 +31,16 @@ class GeographyLookupServiceImpl implements GeographyLookupService {
     @Override
     public List<CitySummary> listCities(UUID stateId) {
         return cities.findByStateIdOrderByName(stateId).stream()
+                .map(c -> new CitySummary(c.getId(), c.getName()))
+                .toList();
+    }
+
+    @Override
+    public List<CitySummary> listCitiesByIds(Set<UUID> cityIds) {
+        if (cityIds.isEmpty()) {
+            return List.of();
+        }
+        return cities.findAllById(cityIds).stream()
                 .map(c -> new CitySummary(c.getId(), c.getName()))
                 .toList();
     }

@@ -14,16 +14,20 @@ import in.anytimework.atwbackend.masterdata.application.DepartmentService;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.masterdata.application.SkillService;
+import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
 import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerDesignationsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerSkillsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerAddressRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerStatusHistoryResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerSummaryResponse;
+import in.anytimework.atwbackend.worker.application.WorkerAddressService;
+import in.anytimework.atwbackend.worker.domain.AddressType;
 import in.anytimework.atwbackend.worker.domain.Gender;
 import in.anytimework.atwbackend.worker.domain.WorkerDesignation;
 import in.anytimework.atwbackend.worker.domain.WorkerDesignationRepository;
@@ -62,6 +66,10 @@ class WorkerServiceIntegrationTest {
     private SkillService skillService;
     @Autowired
     private WorkerDesignationRepository workerDesignationRepository;
+    @Autowired
+    private WorkerAddressService addressService;
+    @Autowired
+    private GeographyLookupService geography;
 
     private static String unique() {
         return UUID.randomUUID().toString().substring(0, 8);
@@ -220,6 +228,26 @@ class WorkerServiceIntegrationTest {
     }
 
     @Test
+    void get_includesFullCurrentAndPermanentAddressResolvedToNames() {
+        DepartmentResponse department = createDepartment();
+        DesignationResponse designation = createDesignation("AddressDetail");
+        WorkerResponse created = workerService.create(baseRequest(department, designation.id()));
+        UUID stateId = geography.listStates().get(0).id();
+
+        addressService.update(created.id(), AddressType.CURRENT,
+                new UpdateWorkerAddressRequest("Worker Hostel", "Sector 18", stateId, null, "122001"));
+
+        WorkerResponse fetched = workerService.get(created.id());
+
+        assertThat(fetched.currentAddress()).isNotNull();
+        assertThat(fetched.currentAddress().line1()).isEqualTo("Worker Hostel");
+        assertThat(fetched.currentAddress().line2()).isEqualTo("Sector 18");
+        assertThat(fetched.currentAddress().pincode()).isEqualTo("122001");
+        assertThat(fetched.currentAddress().state()).isEqualTo(geography.listStates().get(0).name());
+        assertThat(fetched.permanentAddress()).isNull();
+    }
+
+    @Test
     void create_withUnknownDepartment_isRejected() {
         DesignationResponse designation = createDesignation("Driver");
         CreateWorkerRequest request = new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE,
@@ -302,7 +330,7 @@ class WorkerServiceIntegrationTest {
                         uniqueMobile(), null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
         PageResponse<WorkerSummaryResponse> byStatus = workerService.list(
-                new WorkerSearchCriteria(Set.of(WorkerStatus.REGISTERED), null, null, Set.of(designation.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(Set.of(WorkerStatus.REGISTERED), null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 20));
         assertThat(byStatus.content()).extracting(WorkerSummaryResponse::id).contains(created.id());
         assertThat(byStatus.content()).allSatisfy(w -> assertThat(w.primaryDesignationName()).isEqualTo(designation.name()));
@@ -311,12 +339,12 @@ class WorkerServiceIntegrationTest {
         // database accumulates rows across every run in a session, so an unscoped, unsorted page of 20
         // can't be assumed to still include this run's row once enough prior runs share the same term.
         PageResponse<WorkerSummaryResponse> bySearch = workerService.list(
-                new WorkerSearchCriteria(null, null, null, null, null, null, findableFirstName, null, null),
+                new WorkerSearchCriteria(null, null, null, null, null, null, findableFirstName, null, null, null, null),
                 PageRequest.of(0, 20));
         assertThat(bySearch.content()).extracting(WorkerSummaryResponse::id).contains(created.id());
 
         PageResponse<WorkerSummaryResponse> byWrongStatus = workerService.list(
-                new WorkerSearchCriteria(Set.of(WorkerStatus.BLACKLISTED), null, null, Set.of(designation.id()), null, null, null, null, null),
+                new WorkerSearchCriteria(Set.of(WorkerStatus.BLACKLISTED), null, null, Set.of(designation.id()), null, null, null, null, null, null, null),
                 PageRequest.of(0, 20));
         assertThat(byWrongStatus.content()).extracting(WorkerSummaryResponse::id).doesNotContain(created.id());
     }

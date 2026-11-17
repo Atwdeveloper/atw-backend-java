@@ -6,6 +6,7 @@ import in.anytimework.atwbackend.identity.api.role.dto.UpdateAdminRoleRequest;
 import in.anytimework.atwbackend.identity.application.AdminRoleService;
 import in.anytimework.atwbackend.shared.api.ApiResponse;
 import in.anytimework.atwbackend.shared.api.ApiVersions;
+import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.security.HttpRequests;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -15,6 +16,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,9 +25,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
 import java.util.UUID;
 
 /** Role CRUD and permission assignment. Every endpoint requires the matching {@code admin_roles.*} permission. */
@@ -55,30 +57,50 @@ public class AdminRoleController {
 
     @GetMapping
     @PreAuthorize("@authz.has('admin_roles.view')")
-    @Operation(summary = "List all roles",
-            description = "Returns every role with its full `permissionCodes` list. Not paginated - the role "
-                    + "count is small and operator-managed, not user-generated, unlike Staff below.")
+    @Operation(summary = "List roles",
+            description = "**Response shape changed (2026-11-17): this now returns a paginated "
+                    + "`PageResponse<AdminRoleResponse>` under `data`, not a bare array** - a role list consumer "
+                    + "built against the old flat-array shape must be updated to read `data.content` instead. "
+                    + "Standard Spring pagination via query params: `page` (0-based, default `0`), `size` (default "
+                    + "`100`, capped at `500`, same as Staff above), `sort` (allowed values: name, createdAt, "
+                    + "updatedAt - e.g. `sort=name,asc`; anything else is rejected with `400 VALIDATION_ERROR`). "
+                    + "Only 4 roles exist today and the count is still operator-managed, not user-generated, but "
+                    + "pagination/search/sort are implemented for real rather than left as a stub, matching every "
+                    + "other list in this API.\n\n"
+                    + "**Filters** (both optional, ANDed together): `search` (free-text, case-insensitive partial "
+                    + "match against name and description), `systemRole` (`true`/`false`, exact match). Each role "
+                    + "still carries its full `permissionCodes` list.")
+    @Parameter(name = "search", description = "Free-text match against role name and description.", example = "developer")
+    @Parameter(name = "systemRole", description = "Filter to only system roles (true) or only non-system roles (false).")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "All roles.",
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "A page of roles.",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             {
                               "success": true,
-                              "data": [
-                                {
-                                  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                  "name": "Senior Developer",
-                                  "description": "Full operational access across modules including configuration, payroll, reports and face enrollment.",
-                                  "systemRole": false,
-                                  "permissionCodes": ["admin_staff.view", "admin_staff.view_kyc", "admin_staff.view_bank_details"]
-                                },
-                                {
-                                  "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-                                  "name": "QA Tester",
-                                  "description": "Read-only access for QA",
-                                  "systemRole": false,
-                                  "permissionCodes": ["dashboard.view"]
-                                }
-                              ],
+                              "data": {
+                                "content": [
+                                  {
+                                    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                    "name": "Senior Developer",
+                                    "description": "Full operational access across modules including configuration, payroll, reports and face enrollment.",
+                                    "systemRole": false,
+                                    "permissionCodes": ["admin_staff.view", "admin_staff.view_kyc", "admin_staff.view_bank_details"]
+                                  },
+                                  {
+                                    "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                                    "name": "QA Tester",
+                                    "description": "Read-only access for QA",
+                                    "systemRole": false,
+                                    "permissionCodes": ["dashboard.view"]
+                                  }
+                                ],
+                                "page": 0,
+                                "size": 100,
+                                "totalElements": 2,
+                                "totalPages": 1,
+                                "first": true,
+                                "last": true
+                              },
                               "error": null
                             }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller lacks `admin_roles.view`.",
@@ -95,8 +117,11 @@ public class AdminRoleController {
                               }
                             }""")))
     })
-    public ApiResponse<List<AdminRoleResponse>> list() {
-        return ApiResponse.ok(roleService.list());
+    public ApiResponse<PageResponse<AdminRoleResponse>> list(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Boolean systemRole,
+            Pageable pageable) {
+        return ApiResponse.ok(roleService.list(search, systemRole, pageable));
     }
 
     @GetMapping("/{id}")

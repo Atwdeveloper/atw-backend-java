@@ -123,10 +123,18 @@ public class AdminWorkerFaceEnrollmentController {
             lighting) come verbatim from the provider.
             2. The liveness check must pass - rejects an obvious photo-of-a-photo/spoof attempt.
 
-            Locally and in tests (`atw.face-auth.provider` unset, defaulting to the stub adapter), both \
-            business rules above always pass for any input - they can only actually fail once \
+            One more check, against every OTHER currently-enrolled, non-deleted worker (-> 409 CONFLICT, \
+            nothing persisted - a face can only ever be enrolled to one worker):
+
+            3. The new photo must not confidently match a DIFFERENT worker's existing template. Re-enrolling \
+            the same worker (overwriting their own prior photo) is never affected by this check.
+
+            Locally and in tests (`atw.face-auth.provider` unset, defaulting to the stub adapter), the two \
+            provider-side business rules above always pass for any input, since the stub never rejects \
+            anything on quality/liveness grounds - they can only actually fail once \
             `atw.face-auth.provider=python` points at a real deployment of the separate face-auth \
-            service.""")
+            service. The duplicate-face check (3) runs either way, but the stub's embeddings are random \
+            per call, so it can only be exercised meaningfully against the real provider too.""")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Enrolled (or re-enrolled, overwriting the previous template)",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = FaceEnrollmentDto.class), examples = @ExampleObject(value = """
@@ -138,6 +146,9 @@ public class AdminWorkerFaceEnrollmentController {
                             @ExampleObject(name = "unsupported-content-type", value = """
                                     { "success": false, "data": null, "error": { "code": "VALIDATION_ERROR", "message": "Unsupported image content type: application/pdf (allowed: image/png, image/jpeg, image/webp)", "fieldErrors": null, "timestamp": "2026-11-13T06:40:00Z", "traceId": "a1b2c3d4e5f60718" } }""")
                     })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "The photo confidently matches a different worker's existing enrollment - nothing was persisted",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(name = "duplicate-face", value = """
+                            { "success": false, "data": null, "error": { "code": "CONFLICT", "message": "This face is already enrolled to worker 99999999-9999-4999-8999-999999999999 (similarity 0.91) - a face can only be enrolled once.", "fieldErrors": null, "timestamp": "2026-11-17T06:40:00Z", "traceId": "a1b2c3d4e5f60718" } }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "The face-auth provider rejected the photo itself - nothing was persisted",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = {
                             @ExampleObject(name = "quality-insufficient", value = """
@@ -192,8 +203,10 @@ public class AdminWorkerFaceEnrollmentController {
 
             **1:N identification, not 1:1 verification** - there is no `workerId` in this request; the \
             point is finding out who the photo belongs to. Compares the uploaded photo against every \
-            currently-enrolled worker (not scoped to a company/team - there is no such actor in this \
-            codebase yet) and returns the best match, if any.
+            currently-enrolled, non-deleted worker (not scoped to a company/team - there is no such actor \
+            in this codebase yet; a terminated worker's old template is excluded the same way legacy \
+            excluded one, even though the enrollment row itself is never deleted) and returns the best \
+            match, if any.
 
             `matched=false` is a normal, successful response, not an error - it means either nothing \
             scored above the configured threshold, or the top two candidates were too close together \

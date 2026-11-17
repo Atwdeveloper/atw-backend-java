@@ -49,8 +49,33 @@ more available now than before:
 - A docs correction only (behavior was already like this, the old doc was just wrong): there is **no**
   "account locks after 5 failed password attempts" rule. Login is protected by rate-limiting instead.
   If you built any UI copy assuming a lockout message, it won't ever actually appear.
+- **As of 2026-11-17, Staff listing finally has real filters**, not just pagination: `status`
+  (multiselect), `roleId` (multiselect — a staff member can hold several roles, matches any of them),
+  `superAdmin` (true/false), and free-text `search` (name/email/username/phone). Same request/response
+  shape otherwise.
+- **As of 2026-11-17, Roles listing changed shape — this one needs a code change if you've already
+  built it.** `GET /admin/roles` used to return a flat array (`data: [...]`). It now returns the same
+  paginated shape every other list uses (`data: { content: [...], page, size, totalElements, ... }`) —
+  plus it finally supports `search`, a `systemRole` filter, and sorting. Read `data.content` instead of
+  `data` directly, or the roles table will break against the new response.
 
 **Where to look:** `ATW-RBAC-Staff.postman_collection.json` (updated).
+
+### Worker Bank Detail Verification
+
+Confirms a worker's declared bank account against the bank itself (account exists, and the name on the
+account matches what was declared) before marking it trusted. This endpoint already existed before this
+handover doc started tracking it — documented here for the first time.
+
+- `POST /workers/{id}/bank-detail/verify` — the authoritative check against a real, already-created
+  worker's saved bank details. Only this call ever sets `verified`/`verifiedAt`.
+- **New as of 2026-11-17:** `POST /workers/bank-detail/check` — a standalone version that takes the
+  account number/IFSC/name directly in the request body, with **no worker involved at all** and nothing
+  saved. Use this for a quick sanity check before a worker record even exists (e.g. during intake) — it's
+  advisory only and never marks anything verified.
+
+**Where to look:** `ATW-Worker.postman_collection.json` — new "Check Bank Account" request added to the
+existing Worker Bank Detail folder.
 
 ### Login / Account (Auth)
 
@@ -76,7 +101,19 @@ The worker list and detail view also show **KYC status** and **face-enrollment s
 read-only fields — you don't call those other modules separately just to show a badge on the worker
 list; it's already included in the worker response.
 
-**Where to look:** `ATW-Worker.postman_collection.json` (new).
+**As of 2026-11-17:**
+- The worker **list** (and CSV export) now show **current/permanent city + state** as plain display
+  fields (`currentCity`, `currentState`, `permanentCity`, `permanentState`) — city/state only, to keep
+  the list light. The worker **detail** view (`GET /workers/{id}`) shows the **full** address for both
+  types instead (line1/line2/city/state/pincode) — use the detail call when you need more than city/state.
+- Two new list filters: `stateId` / `cityId` (multiselect, same pattern as everything else) — matches a
+  worker whose *either* address (current or permanent) is in one of the given states/cities.
+- **Worker notes can now be deleted**, not just listed/added: `DELETE /workers/{id}/notes/{noteId}`. This
+  is a genuine hard delete (the note row is actually gone, unlike a worker record's own soft delete) and
+  needs its own new permission — see §3 below, it is **not granted to any role by default**, so this
+  button will 403 for everyone until an admin assigns it on the Roles screen.
+
+**Where to look:** `ATW-Worker.postman_collection.json` (new/updated).
 
 ### Worker KYC (identity verification)
 
@@ -96,9 +133,17 @@ Two things live here:
 Upload a photo of a worker's face (with their explicit consent) to enroll a biometric template, used
 later for attendance face-matching. Three endpoints: check status, enroll/re-enroll (re-enrolling fully
 replaces the old one), and remove. A bad-quality or clearly-not-a-live-photo image is rejected outright
-with a clear error, nothing gets saved.
+with a clear error, nothing gets saved. **As of 2026-11-17**, enroll/re-enroll can also fail with a 409
+`CONFLICT` if the photo matches a face already enrolled to a *different* worker (worth a distinct error
+message in the UI, not lumped in with the 400/422 cases) — nothing gets saved in that case either.
 
-**Where to look:** `ATW-Worker-FaceAuth.postman_collection.json` (new).
+A fourth endpoint, **Identify Face** (`POST /admin/face-identify`, its own `faceauth.identify`
+permission), added 2026-11-16: upload any photo and get back which enrolled worker it best matches, if
+any — "whose face is this" rather than "does this one worker have a template." No `workerId` in the
+request; it searches every enrolled worker platform-wide. `matched: false` is a normal response, not an
+error.
+
+**Where to look:** `ATW-Worker-FaceAuth.postman_collection.json` (updated).
 
 ---
 
@@ -106,9 +151,10 @@ with a clear error, nothing gets saved.
 
 Three new permission "groups" now exist in the permission catalog, for assigning to roles:
 
-- **`workers`** — view, create, edit, toggle_status, delete, export, view_comments
+- **`workers`** — view, create, edit, toggle_status, delete, export, view_comments, delete_comments (the
+  last one gates deleting a worker note, see above — also not granted to any role by default)
 - **`kyc`** — view, submit
-- **`faceauth`** — view, enroll
+- **`faceauth`** — view, enroll, identify (the last one gates the Identify Face endpoint above)
 
 If your Roles screen renders whatever the permission-catalog endpoint returns, this should show up
 automatically with no code change. If it has any hardcoded list of modules, these three need adding.
@@ -126,3 +172,5 @@ automatically with no code change. If it has any hardcoded list of modules, thes
 5. Existing screens: no required changes, but consider using the new multiselect filters/search/sort/
    bulk actions where it'd improve the UI, and double-check nothing in your code assumed the old
    singular `industryId`/`designationId` filter names.
+6. **One exception to "no required changes":** if you've already built the Roles screen, update it now
+   for the new paginated response shape (see Staff / Roles above) — read `data.content`, not `data`.

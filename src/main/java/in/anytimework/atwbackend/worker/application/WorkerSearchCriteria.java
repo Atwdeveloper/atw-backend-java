@@ -14,6 +14,9 @@ import java.util.UUID;
  * {@code registeredFrom}/{@code registeredTo} filter on {@code createdAt} (the worker's "registration
  * date" - there is no separate stored registration-date column; legacy's own equivalent filter is
  * likewise just a renamed filter over its creation timestamp, confirmed by reading its code directly).
+ * {@code stateId}/{@code cityId} match a worker whose PERMANENT **or** CURRENT address (see
+ * {@code AddressType}) references any of the given ids - a worker with two addresses on file is not
+ * required to match on both, just either one.
  */
 public record WorkerSearchCriteria(
         Set<WorkerStatus> status,
@@ -24,6 +27,8 @@ public record WorkerSearchCriteria(
         Set<KycStatus> kycStatus,
         String search,
         LocalDate registeredFrom,
-        LocalDate registeredTo
+        LocalDate registeredTo,
+        Set<UUID> stateId,
+        Set<UUID> cityId
 ) {
 }

@@ -7,6 +7,7 @@ import in.anytimework.atwbackend.faceauth.application.dto.FaceIdentificationResu
 import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollment;
 import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollmentRepository;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
+import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -33,16 +35,19 @@ class FaceAuthServiceImpl implements FaceAuthService {
     private final FaceEnrollmentPhotoSupport photoSupport;
     private final DocumentService documentService;
     private final FaceIdentifyProperties identifyProperties;
+    private final FaceDuplicateProperties duplicateProperties;
     private final Clock clock;
 
     FaceAuthServiceImpl(WorkerFaceEnrollmentRepository enrollments, FaceAuthPort faceAuthPort,
                         FaceEnrollmentPhotoSupport photoSupport, DocumentService documentService,
-                        FaceIdentifyProperties identifyProperties, Clock clock) {
+                        FaceIdentifyProperties identifyProperties, FaceDuplicateProperties duplicateProperties,
+                        Clock clock) {
         this.enrollments = enrollments;
         this.faceAuthPort = faceAuthPort;
         this.photoSupport = photoSupport;
         this.documentService = documentService;
         this.identifyProperties = identifyProperties;
+        this.duplicateProperties = duplicateProperties;
         this.clock = clock;
     }
 
@@ -89,6 +94,7 @@ class FaceAuthServiceImpl implements FaceAuthService {
         if (!result.live()) {
             throw new BusinessRuleException("Liveness check failed - please retake the photo of the worker in person.");
         }
+        rejectIfDuplicate(workerId, result.embedding());
 
         WorkerFaceEnrollment existing = enrollments.findByWorkerId(workerId).orElse(null);
         UUID previousPhotoId = existing == null ? null : existing.getEnrollPhotoDocumentId();
@@ -116,11 +122,20 @@ class FaceAuthServiceImpl implements FaceAuthService {
     }
 
     @Override
+    @Transactional
+    public void excludeFromMatching(UUID workerId) {
+        enrollments.findByWorkerId(workerId).ifPresent(e -> {
+            e.excludeFromMatching(clock.instant());
+            enrollments.save(e);
+        });
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public FaceIdentificationResult identify(byte[] imageBytes, String contentType) {
         photoSupport.validate(contentType, imageBytes);
 
-        List<WorkerFaceEnrollment> candidates = enrollments.findAll();
+        List<WorkerFaceEnrollment> candidates = enrollments.findByExcludedFromMatchingAtIsNull();
         if (candidates.isEmpty()) {
             throw new BusinessRuleException("There is no one enrolled yet to compare against.");
         }
@@ -137,10 +152,7 @@ class FaceAuthServiceImpl implements FaceAuthService {
             throw new BusinessRuleException("Liveness check failed - please retake the photo in person.");
         }
 
-        List<FaceIdentificationCandidate> ranked = candidates.stream()
-                .map(c -> new FaceIdentificationCandidate(c.getWorkerId(), cosineSimilarity(probe.embedding(), c.getEmbedding())))
-                .sorted(Comparator.comparingDouble(FaceIdentificationCandidate::score).reversed())
-                .toList();
+        List<FaceIdentificationCandidate> ranked = rankCandidates(probe.embedding(), candidates);
 
         FaceIdentificationCandidate best = ranked.get(0);
         double runnerUpScore = ranked.size() > 1 ? ranked.get(1).score() : Double.NEGATIVE_INFINITY;
@@ -149,6 +161,45 @@ class FaceAuthServiceImpl implements FaceAuthService {
 
         List<FaceIdentificationCandidate> topMatches = ranked.stream().limit(MAX_TOP_MATCHES).toList();
         return new FaceIdentificationResult(matched, matched ? best.workerId() : null, best.score(), ambiguous, topMatches);
+    }
+
+    /**
+     * Hard-rejects enrollment (throws {@link ConflictException}, nothing persisted) if {@code newEmbedding}
+     * confidently matches an already-enrolled, not-excluded DIFFERENT worker - same unconditional
+     * every-enroll check and same outright-reject behavior as legacy's
+     * {@code FaceAuthService::findDuplicateFace}: nothing is saved, and the error names the
+     * conflicting worker's id and the similarity score so the admin can look it up and decide what to
+     * do. {@code workerId} itself is excluded from the comparison set in Java (not by the repository
+     * query) - re-enrolling yourself must never trip over your own prior photo, exactly like legacy
+     * excludes {@code excludeWorkerId}.
+     *
+     * <p>Deliberately does not denormalize the conflicting worker's name/code into this message the way
+     * legacy's PHP does (it loads {@code worker:id,first_name,last_name,worker_code} via an Eloquent
+     * relationship) - this module is not allowed to reach into {@code worker}'s table directly, and the
+     * admin frontend already has a cheap way to resolve a worker id to a name (the existing worker-GET
+     * endpoint), so no new cross-module dependency is needed just for a display string.</p>
+     */
+    private void rejectIfDuplicate(UUID workerId, float[] newEmbedding) {
+        List<WorkerFaceEnrollment> others = enrollments.findByExcludedFromMatchingAtIsNull().stream()
+                .filter(e -> !e.getWorkerId().equals(workerId))
+                .toList();
+        if (others.isEmpty()) {
+            return;
+        }
+        FaceIdentificationCandidate best = rankCandidates(newEmbedding, others).get(0);
+        if (best.score() >= duplicateProperties.threshold()) {
+            throw new ConflictException(String.format(Locale.ROOT,
+                    "This face is already enrolled to worker %s (similarity %.2f) - a face can only be enrolled once.",
+                    best.workerId(), best.score()));
+        }
+    }
+
+    /** Shared by {@link #identify} and {@link #rejectIfDuplicate} - both are "rank every candidate by cosine similarity to one probe embedding", just applied to a different candidate set and decision. */
+    private static List<FaceIdentificationCandidate> rankCandidates(float[] probeEmbedding, List<WorkerFaceEnrollment> candidates) {
+        return candidates.stream()
+                .map(c -> new FaceIdentificationCandidate(c.getWorkerId(), cosineSimilarity(probeEmbedding, c.getEmbedding())))
+                .sorted(Comparator.comparingDouble(FaceIdentificationCandidate::score).reversed())
+                .toList();
     }
 
     /**

@@ -15,4 +15,7 @@ public interface WorkerFaceEnrollmentRepository extends JpaRepository<WorkerFace
 
     /** Batch counterpart to {@link #findByWorkerId} - backs {@code FaceAuthService.getEnrollmentDates}. */
     List<WorkerFaceEnrollment> findByWorkerIdIn(Set<UUID> workerIds);
+
+    /** The actual candidate pool for both {@code identify} and the enrollment-time duplicate check - every enrollment not excluded via {@code excludeFromMatching} (see that column's Javadoc on {@link WorkerFaceEnrollment}). */
+    List<WorkerFaceEnrollment> findByExcludedFromMatchingAtIsNull();
 }
