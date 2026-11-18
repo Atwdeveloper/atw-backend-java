@@ -632,7 +632,7 @@ class AdminStaffRoleIntegrationTest {
         actingAs(actorId, () -> staffService.updateStatus(disabled.id(), AdminStatus.DISABLED, "127.0.0.1", "JUnit"));
 
         PageResponse<AdminStaffResponse> result = staffService.list(
-                new AdminStaffSearchCriteria(Set.of(AdminStatus.ACTIVE, AdminStatus.DISABLED), null, null, prefix),
+                new AdminStaffSearchCriteria(Set.of(AdminStatus.ACTIVE, AdminStatus.DISABLED), null, null, prefix, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(AdminStaffResponse::id)
@@ -648,7 +648,7 @@ class AdminStaffRoleIntegrationTest {
         actingAs(actorId, () -> staffService.updateStatus(disabled.id(), AdminStatus.DISABLED, "127.0.0.1", "JUnit"));
 
         PageResponse<AdminStaffResponse> disabledOnly = staffService.list(
-                new AdminStaffSearchCriteria(Set.of(AdminStatus.DISABLED), null, null, prefix),
+                new AdminStaffSearchCriteria(Set.of(AdminStatus.DISABLED), null, null, prefix, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(disabledOnly.content()).extracting(AdminStaffResponse::id).containsExactly(disabled.id());
@@ -671,7 +671,7 @@ class AdminStaffRoleIntegrationTest {
         AdminStaffResponse neither = createStaffAsSuperAdmin("Neither Role " + unique(), List.of());
 
         PageResponse<AdminStaffResponse> result = staffService.list(
-                new AdminStaffSearchCriteria(null, Set.of(roleA.id(), roleB.id()), null, null),
+                new AdminStaffSearchCriteria(null, Set.of(roleA.id(), roleB.id()), null, null, null, null),
                 PageRequest.of(0, 50));
 
         assertThat(result.content()).extracting(AdminStaffResponse::id)
@@ -686,21 +686,80 @@ class AdminStaffRoleIntegrationTest {
         AdminStaffResponse staff = createStaffAsSuperAdmin(marker + " Person", List.of());
 
         PageResponse<AdminStaffResponse> byName = staffService.list(
-                new AdminStaffSearchCriteria(null, null, null, marker), PageRequest.of(0, 20));
+                new AdminStaffSearchCriteria(null, null, null, marker, null, null), PageRequest.of(0, 20));
         assertThat(byName.content()).extracting(AdminStaffResponse::id).contains(staff.id());
 
         PageResponse<AdminStaffResponse> byEmail = staffService.list(
-                new AdminStaffSearchCriteria(null, null, null, staff.email().substring(0, 12)), PageRequest.of(0, 20));
+                new AdminStaffSearchCriteria(null, null, null, staff.email().substring(0, 12), null, null), PageRequest.of(0, 20));
         assertThat(byEmail.content()).extracting(AdminStaffResponse::id).contains(staff.id());
     }
 
     @Test
     void staffList_rejectsAnUnsortableField() {
         assertThatThrownBy(() -> staffService.list(
-                new AdminStaffSearchCriteria(null, null, null, null),
+                new AdminStaffSearchCriteria(null, null, null, null, null, null),
                 PageRequest.of(0, 10, Sort.by("passwordHash"))))
                 .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("passwordHash");
+    }
+
+    @Test
+    void staffList_stateAndCityFiltersMatchAStaffMembersAddress() {
+        City jaipur = createTestCity();
+        AdminStaffResponse inJaipur = createStaffAsSuperAdmin("Jaipur Staff " + unique(), List.of());
+        AdminStaffResponse noAddress = createStaffAsSuperAdmin("No Address Staff " + unique(), List.of());
+        staffAddressService.update(inJaipur.id(),
+                new UpdateAddressRequest("1 MG Road", null, jaipur.getStateId(), jaipur.getId(), "302001"),
+                "127.0.0.1", "JUnit");
+
+        PageResponse<AdminStaffResponse> byCity = staffService.list(
+                new AdminStaffSearchCriteria(null, null, null, null, null, Set.of(jaipur.getId())),
+                PageRequest.of(0, 50));
+        assertThat(byCity.content()).extracting(AdminStaffResponse::id).contains(inJaipur.id());
+        assertThat(byCity.content()).extracting(AdminStaffResponse::id).doesNotContain(noAddress.id());
+
+        // A brand-new State (not the shared "Rajasthan" fixture createTestCity() reuses) keeps this
+        // assertion isolated from every other test's accumulated rows in the shared test database -
+        // same reasoning as staffList_roleFilterIsMultiselect's freshly created roleA/roleB.
+        State freshState = states.save(new State("StateFilter " + unique(), unique().toUpperCase()));
+        City cityInFreshState = cities.save(new City(freshState.getId(), "City " + unique()));
+        AdminStaffResponse inFreshState = createStaffAsSuperAdmin("State Filter Staff " + unique(), List.of());
+        staffAddressService.update(inFreshState.id(),
+                new UpdateAddressRequest("2 Park Street", null, freshState.getId(), cityInFreshState.getId(), "400001"),
+                "127.0.0.1", "JUnit");
+
+        PageResponse<AdminStaffResponse> byState = staffService.list(
+                new AdminStaffSearchCriteria(null, null, null, null, Set.of(freshState.getId()), null),
+                PageRequest.of(0, 50));
+        assertThat(byState.content()).extracting(AdminStaffResponse::id).containsExactly(inFreshState.id());
+    }
+
+    @Test
+    void staffListAndGet_includeResolvedCityAndStateNames() {
+        City jaipur = createTestCity();
+        AdminStaffResponse staff = createStaffAsSuperAdmin("City Display Staff " + unique(), List.of());
+        staffAddressService.update(staff.id(),
+                new UpdateAddressRequest("1 MG Road", null, jaipur.getStateId(), jaipur.getId(), "302001"),
+                "127.0.0.1", "JUnit");
+
+        AdminStaffResponse fetched = staffService.get(staff.id());
+        assertThat(fetched.city()).isEqualTo(jaipur.getName());
+        assertThat(fetched.state()).isNotNull();
+
+        PageResponse<AdminStaffResponse> listed = staffService.list(
+                new AdminStaffSearchCriteria(null, null, null, null, null, Set.of(jaipur.getId())),
+                PageRequest.of(0, 50));
+        assertThat(listed.content()).extracting(AdminStaffResponse::city).contains(jaipur.getName());
+    }
+
+    @Test
+    void staffWithNoAddressSaved_cityAndStateAreNull() {
+        AdminStaffResponse staff = createStaffAsSuperAdmin("No Address Display " + unique(), List.of());
+
+        AdminStaffResponse fetched = staffService.get(staff.id());
+
+        assertThat(fetched.city()).isNull();
+        assertThat(fetched.state()).isNull();
     }
 
     // ---- role list: pagination, search, sort ------------------------------------------------------

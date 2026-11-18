@@ -53,6 +53,13 @@ more available now than before:
   (multiselect), `roleId` (multiselect — a staff member can hold several roles, matches any of them),
   `superAdmin` (true/false), and free-text `search` (name/email/username/phone). Same request/response
   shape otherwise.
+- **As of 2026-11-18, two more Staff list filters: `stateId` / `cityId`** (multiselect, same pattern) —
+  matches a staff member whose address (set via `GET/PUT /admin/staff/{id}/address`) is in one of the
+  given states/cities. A staff member with no address saved yet never matches either filter.
+- **As of 2026-11-18, the Staff list (and Get Staff) now also *display* `city`/`state`** — resolved
+  display names from the saved address, the same display-only pattern Worker already has. Both are
+  `null` until an address has been saved. The full address (line1/line2/pincode) is still only on
+  `GET .../address`, same as before.
 - **As of 2026-11-17, Roles listing changed shape — this one needs a code change if you've already
   built it.** `GET /admin/roles` used to return a flat array (`data: [...]`). It now returns the same
   paginated shape every other list uses (`data: { content: [...], page, size, totalElements, ... }`) —
