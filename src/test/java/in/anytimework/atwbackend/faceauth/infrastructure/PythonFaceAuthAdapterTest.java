@@ -1,6 +1,5 @@
 package in.anytimework.atwbackend.faceauth.infrastructure;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import in.anytimework.atwbackend.faceauth.application.FaceEmbeddingResult;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import org.junit.jupiter.api.Test;
@@ -9,6 +8,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 
@@ -36,7 +36,7 @@ class PythonFaceAuthAdapterTest {
             .baseUrl("http://face-auth.test")
             .defaultHeader("X-API-Key", "test-key");
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
-    private final PythonFaceAuthAdapter adapter = new PythonFaceAuthAdapter(builder.build(), new ObjectMapper());
+    private final PythonFaceAuthAdapter adapter = new PythonFaceAuthAdapter(builder.build(), new JsonMapper());
 
     @Test
     void embed_onSuccess_parsesEmbeddingQualityAndLiveness() {
