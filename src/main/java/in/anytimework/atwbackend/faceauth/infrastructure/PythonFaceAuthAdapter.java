@@ -1,8 +1,6 @@
 package in.anytimework.atwbackend.faceauth.infrastructure;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import in.anytimework.atwbackend.faceauth.application.FaceAuthPort;
 import in.anytimework.atwbackend.faceauth.application.FaceEmbeddingResult;
 import in.anytimework.atwbackend.faceauth.application.FaceQualitySnapshot;
@@ -15,9 +13,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 
@@ -127,9 +126,7 @@ class PythonFaceAuthAdapter implements FaceAuthPort {
             // 2026-11-17 against the real deployment: invalid_image has "reason", multiple_faces_detected
             // has "count", image_too_large has "max_bytes") rather than hardcoding just one of them.
             List<String> extras = new ArrayList<>();
-            Iterator<String> fields = detail.fieldNames();
-            while (fields.hasNext()) {
-                String field = fields.next();
+            for (String field : detail.propertyNames()) {
                 if (!field.equals("error")) {
                     extras.add(field + "=" + detail.get(field).asText());
                 }
