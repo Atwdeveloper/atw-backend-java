@@ -102,16 +102,24 @@ public class AdminStaffController {
                     + "not something this endpoint overrides), `sort` (allowed values: fullName, email, username, "
                     + "createdAt, lastLoginAt, status - e.g. `sort=fullName,asc`; anything else is rejected with "
                     + "`400 VALIDATION_ERROR`). Returns a `PageResponse<AdminStaffResponse>`. KYC/bank fields are "
-                    + "**not** included here - fetch them per-staff-member via the sub-resource endpoints below."
-                    + "\n\n**Filters** (all optional, ANDed together; `status`/`roleId` are multiselect - repeat the "
-                    + "param for an OR within that field, e.g. `status=ACTIVE&status=DISABLED`): `status` (`ACTIVE`/"
-                    + "`DISABLED`), `roleId` (matches a staff member holding ANY of the given role ids), "
-                    + "`superAdmin` (`true`/`false`, exact match), `search` (free-text, case-insensitive partial "
-                    + "match against full name, email, username, and phone).")
+                    + "**not** included here - fetch them per-staff-member via the sub-resource endpoints below. "
+                    + "`city`/`state` (new 2026-11-18) ARE included - resolved display names from the staff "
+                    + "member's saved address, batch-loaded for the whole page (never one query per row); both "
+                    + "are `null` until an address has been saved via `GET/PUT .../address`."
+                    + "\n\n**Filters** (all optional, ANDed together; `status`/`roleId`/`stateId`/`cityId` are "
+                    + "multiselect - repeat the param for an OR within that field, e.g. `status=ACTIVE&status="
+                    + "DISABLED`): `status` (`ACTIVE`/`DISABLED`), `roleId` (matches a staff member holding ANY of "
+                    + "the given role ids), `superAdmin` (`true`/`false`, exact match), `search` (free-text, "
+                    + "case-insensitive partial match against full name, email, username, and phone), `stateId`/"
+                    + "`cityId` (matches a staff member whose address - see `GET/PUT .../address` - references ANY "
+                    + "of the given Masterdata > Geography ids; a staff member with no address row yet never "
+                    + "matches either).")
     @Parameter(name = "status", description = "Filter by one or more statuses.", example = "ACTIVE")
     @Parameter(name = "roleId", description = "Filter by one or more role ids - matches a staff member holding ANY of them.")
     @Parameter(name = "superAdmin", description = "Filter to only super-admin accounts (true) or only non-super-admin accounts (false).")
     @Parameter(name = "search", description = "Free-text match against full name, email, username, and phone.", example = "sharma")
+    @Parameter(name = "stateId", description = "Filter by one or more state ids (Masterdata module) - matches a staff member whose address references any of these.")
+    @Parameter(name = "cityId", description = "Filter by one or more city ids (Masterdata module) - matches a staff member whose address references any of these.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "A page of staff accounts.",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -129,7 +137,9 @@ public class AdminStaffController {
                                     "status": "ACTIVE",
                                     "roles": [{ "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "name": "QA Tester" }],
                                     "lastLoginAt": null,
-                                    "createdAt": "2026-10-24T10:23:00Z"
+                                    "createdAt": "2026-10-24T10:23:00Z",
+                                    "city": "Jaipur",
+                                    "state": "Rajasthan"
                                   }
                                 ],
                                 "page": 0,
@@ -160,15 +170,20 @@ public class AdminStaffController {
             @RequestParam(required = false) Set<UUID> roleId,
             @RequestParam(required = false) Boolean superAdmin,
             @RequestParam(required = false) String search,
+            @RequestParam(required = false) Set<UUID> stateId,
+            @RequestParam(required = false) Set<UUID> cityId,
             Pageable pageable) {
-        return ApiResponse.ok(staffService.list(new AdminStaffSearchCriteria(status, roleId, superAdmin, search), pageable));
+        return ApiResponse.ok(staffService.list(
+                new AdminStaffSearchCriteria(status, roleId, superAdmin, search, stateId, cityId), pageable));
     }
 
     @GetMapping("/{id}")
     @PreAuthorize("@authz.has('admin_staff.view')")
     @Operation(summary = "Get a staff/admin account by id",
-            description = "Returns the core `AdminStaffResponse` record only - profile/address/KYC/bank-detail "
-                    + "live in the sub-resource endpoints below.")
+            description = "Returns the core `AdminStaffResponse` record only - profile/KYC/bank-detail live in the "
+                    + "sub-resource endpoints below. `city`/`state` are resolved display names from the staff "
+                    + "member's saved address (the full address, with line1/line2/pincode, is "
+                    + "`GET .../address` below) - both `null` until one has been saved.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Staff member found.",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
@@ -184,7 +199,9 @@ public class AdminStaffController {
                                 "status": "ACTIVE",
                                 "roles": [{ "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "name": "QA Tester" }],
                                 "lastLoginAt": null,
-                                "createdAt": "2026-10-24T10:23:00Z"
+                                "createdAt": "2026-10-24T10:23:00Z",
+                                "city": "Jaipur",
+                                "state": "Rajasthan"
                               },
                               "error": null
                             }"""))),
@@ -235,7 +252,9 @@ public class AdminStaffController {
                                 "status": "ACTIVE",
                                 "roles": [{ "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "name": "QA Tester" }],
                                 "lastLoginAt": null,
-                                "createdAt": "2026-10-24T10:23:00Z"
+                                "createdAt": "2026-10-24T10:23:00Z",
+                                "city": "Jaipur",
+                                "state": "Rajasthan"
                               },
                               "error": null
                             }"""))),
@@ -298,7 +317,9 @@ public class AdminStaffController {
                                 "status": "ACTIVE",
                                 "roles": [{ "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "name": "QA Tester" }],
                                 "lastLoginAt": null,
-                                "createdAt": "2026-10-24T10:23:00Z"
+                                "createdAt": "2026-10-24T10:23:00Z",
+                                "city": "Jaipur",
+                                "state": "Rajasthan"
                               },
                               "error": null
                             }"""))),
@@ -352,7 +373,9 @@ public class AdminStaffController {
                                 "status": "DISABLED",
                                 "roles": [{ "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "name": "QA Tester" }],
                                 "lastLoginAt": null,
-                                "createdAt": "2026-10-24T10:23:00Z"
+                                "createdAt": "2026-10-24T10:23:00Z",
+                                "city": "Jaipur",
+                                "state": "Rajasthan"
                               },
                               "error": null
                             }"""))),

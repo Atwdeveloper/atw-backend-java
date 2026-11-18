@@ -47,6 +47,15 @@ public record AdminStaffResponse(
         Instant lastLoginAt,
 
         @Schema(description = "When this account was created.", example = "2026-10-24T10:23:00Z")
-        Instant createdAt
+        Instant createdAt,
+
+        @Schema(description = "City name from this staff member's saved address (see `GET/PUT .../address`), "
+                + "resolved for display. `null` if no address has been saved yet, or the address has no city set.",
+                example = "Jaipur", nullable = true)
+        String city,
+
+        @Schema(description = "State name from this staff member's saved address, resolved for display. `null` if "
+                + "no address has been saved yet, or the address has no state set.", example = "Rajasthan", nullable = true)
+        String state
 ) {
 }

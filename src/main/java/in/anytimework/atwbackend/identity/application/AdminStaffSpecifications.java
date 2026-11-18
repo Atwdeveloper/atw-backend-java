@@ -2,6 +2,7 @@ package in.anytimework.atwbackend.identity.application;
 
 import in.anytimework.atwbackend.identity.domain.AdminStatus;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
+import in.anytimework.atwbackend.identity.domain.AdminUserAddress;
 import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -42,6 +43,32 @@ final class AdminStaffSpecifications {
 
     static Specification<AdminUser> isSuperAdmin(boolean superAdmin) {
         return (root, query, cb) -> cb.equal(root.get("superAdmin"), superAdmin);
+    }
+
+    /**
+     * Same uncorrelated-{@link Subquery} shape as {@code hasRole} - {@link AdminUserAddress} has no
+     * JPA relationship back to {@link AdminUser} (own table, {@code admin_user_id} is a plain FK), so
+     * a direct join isn't available; a subquery also sidesteps the row-duplication-under-Pageable risk
+     * a join would otherwise carry. Mirrors {@code worker.application.WorkerSpecifications.hasState}/
+     * {@code hasCity} exactly, minus the PERMANENT/CURRENT address-type distinction worker has - an
+     * admin/staff account has exactly one address (see {@link AdminUserAddress}'s Javadoc).
+     */
+    static Specification<AdminUser> hasState(Set<UUID> stateIds) {
+        return (root, query, cb) -> {
+            Subquery<UUID> subquery = query.subquery(UUID.class);
+            var address = subquery.from(AdminUserAddress.class);
+            subquery.select(address.get("adminUserId")).where(address.get("address").get("stateId").in(stateIds));
+            return root.get("id").in(subquery);
+        };
+    }
+
+    static Specification<AdminUser> hasCity(Set<UUID> cityIds) {
+        return (root, query, cb) -> {
+            Subquery<UUID> subquery = query.subquery(UUID.class);
+            var address = subquery.from(AdminUserAddress.class);
+            subquery.select(address.get("adminUserId")).where(address.get("address").get("cityId").in(cityIds));
+            return root.get("id").in(subquery);
+        };
     }
 
     static Specification<AdminUser> matchesSearch(String term) {

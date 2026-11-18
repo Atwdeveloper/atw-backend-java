@@ -13,6 +13,11 @@ import in.anytimework.atwbackend.identity.domain.AuthTokenType;
 import in.anytimework.atwbackend.identity.domain.AdminPermission;
 import in.anytimework.atwbackend.identity.domain.AdminRole;
 import in.anytimework.atwbackend.identity.domain.AdminRoleRepository;
+import in.anytimework.atwbackend.identity.domain.AdminUserAddress;
+import in.anytimework.atwbackend.identity.domain.AdminUserAddressRepository;
+import in.anytimework.atwbackend.masterdata.application.lookup.CitySummary;
+import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
+import in.anytimework.atwbackend.masterdata.application.lookup.StateSummary;
 import in.anytimework.atwbackend.notification.application.NotificationService;
 import in.anytimework.atwbackend.notification.application.SendEmailCommand;
 import in.anytimework.atwbackend.shared.api.PageResponse;
@@ -36,6 +41,7 @@ import org.springframework.util.StringUtils;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +65,8 @@ public class AdminStaffService {
     private final AdminUserRepository adminUsers;
     private final AdminRoleRepository roles;
     private final AdminAuthTokenRepository authTokens;
+    private final AdminUserAddressRepository addresses;
+    private final GeographyLookupService geography;
     private final RefreshTokenService refreshTokenService;
     private final PasswordEncoder passwordEncoder;
     private final NotificationService notificationService;
@@ -70,6 +78,7 @@ public class AdminStaffService {
     private final String frontendBaseUrl;
 
     public AdminStaffService(AdminUserRepository adminUsers, AdminRoleRepository roles, AdminAuthTokenRepository authTokens,
+                        AdminUserAddressRepository addresses, GeographyLookupService geography,
                         RefreshTokenService refreshTokenService, PasswordEncoder passwordEncoder,
                         NotificationService notificationService, AdminAuditService audit,
                         AdminSecurityProperties properties, CurrentAdmin currentAdmin,
@@ -78,6 +87,8 @@ public class AdminStaffService {
         this.adminUsers = adminUsers;
         this.roles = roles;
         this.authTokens = authTokens;
+        this.addresses = addresses;
+        this.geography = geography;
         this.refreshTokenService = refreshTokenService;
         this.passwordEncoder = passwordEncoder;
         this.notificationService = notificationService;
@@ -94,7 +105,9 @@ public class AdminStaffService {
         SortValidation.assertSortable(pageable, ALLOWED_SORT);
         List<Specification<AdminUser>> predicates = buildPredicates(criteria);
         Page<AdminUser> page = adminUsers.findAll(Specifications.allOf(predicates), pageable);
-        return PageResponse.from(page.map(this::toDto));
+        Set<UUID> ids = page.getContent().stream().map(AdminUser::getId).collect(Collectors.toSet());
+        AddressNames addressNames = addressNamesByStaff(ids);
+        return PageResponse.from(page.map(admin -> toDto(admin, addressNames)));
     }
 
     /**
@@ -117,6 +130,12 @@ public class AdminStaffService {
         }
         if (StringUtils.hasText(criteria.search())) {
             predicates.add(AdminStaffSpecifications.matchesSearch(criteria.search()));
+        }
+        if (criteria.stateId() != null && !criteria.stateId().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasState(criteria.stateId()));
+        }
+        if (criteria.cityId() != null && !criteria.cityId().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasCity(criteria.cityId()));
         }
         return predicates;
     }
@@ -273,13 +292,69 @@ public class AdminStaffService {
         return adminUsers.findById(id).orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
     }
 
+    /** Single-record path (get/create/update/updateStatus) - one extra lookup is fine here, unlike {@link #list}. */
     private AdminStaffResponse toDto(AdminUser admin) {
+        return toDto(admin, addressNamesByStaff(Set.of(admin.getId())));
+    }
+
+    private AdminStaffResponse toDto(AdminUser admin, AddressNames addressNames) {
         List<AdminRoleRef> roleRefs = admin.getRoles().stream()
                 .map(r -> new AdminRoleRef(r.getId(), r.getName()))
                 .sorted(Comparator.comparing(AdminRoleRef::name))
                 .toList();
         return new AdminStaffResponse(admin.getId(), admin.getUsername(), admin.getEmail(), admin.getFullName(),
                 admin.getPhone(), admin.isSuperAdmin(), admin.getStatus(), roleRefs,
-                admin.getLastLoginAt(), admin.getCreatedAt());
+                admin.getLastLoginAt(), admin.getCreatedAt(),
+                addressNames.city().get(admin.getId()), addressNames.state().get(admin.getId()));
+    }
+
+    /**
+     * Batch-loaded (one query for the whole page, never per row) city/state **names**, keyed by
+     * staff id - mirrors {@code worker.application.WorkerService.addressNamesByWorker}'s shape, minus
+     * the current/permanent address-type split worker has (an admin/staff account has exactly one
+     * address - see {@link AdminUserAddress}'s Javadoc).
+     */
+    private record AddressNames(Map<UUID, String> city, Map<UUID, String> state) {
+    }
+
+    private AddressNames addressNamesByStaff(Set<UUID> staffIds) {
+        if (staffIds.isEmpty()) {
+            return new AddressNames(Map.of(), Map.of());
+        }
+        List<AdminUserAddress> staffAddresses = addresses.findByAdminUserIdIn(staffIds);
+        Set<UUID> cityIds = new HashSet<>();
+        Set<UUID> stateIds = new HashSet<>();
+        for (AdminUserAddress a : staffAddresses) {
+            if (a.getAddress().getCityId() != null) {
+                cityIds.add(a.getAddress().getCityId());
+            }
+            if (a.getAddress().getStateId() != null) {
+                stateIds.add(a.getAddress().getStateId());
+            }
+        }
+        Map<UUID, String> cityNameById = geography.listCitiesByIds(cityIds).stream()
+                .collect(Collectors.toMap(CitySummary::id, CitySummary::name));
+        Map<UUID, String> stateNameById = geography.listStates().stream()
+                .filter(s -> stateIds.contains(s.id()))
+                .collect(Collectors.toMap(StateSummary::id, StateSummary::name));
+
+        // Plain mutable map + explicit put, not Collectors.toMap - Map.merge (which toMap uses
+        // internally) throws NPE on a null value, and an unresolved/not-yet-set city or state id is
+        // exactly that: a legitimate null to skip, not an error.
+        Map<UUID, String> cityByStaff = new HashMap<>();
+        Map<UUID, String> stateByStaff = new HashMap<>();
+        for (AdminUserAddress a : staffAddresses) {
+            UUID cityId = a.getAddress().getCityId();
+            UUID stateId = a.getAddress().getStateId();
+            String cityName = cityId == null ? null : cityNameById.get(cityId);
+            String stateName = stateId == null ? null : stateNameById.get(stateId);
+            if (cityName != null) {
+                cityByStaff.put(a.getAdminUserId(), cityName);
+            }
+            if (stateName != null) {
+                stateByStaff.put(a.getAdminUserId(), stateName);
+            }
+        }
+        return new AddressNames(cityByStaff, stateByStaff);
     }
 }

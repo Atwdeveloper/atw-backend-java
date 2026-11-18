@@ -87,6 +87,12 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-mail</artifactId>
 		</dependency>
+		<!-- RestClient.Builder auto-configuration (Boot 4 split this out of webmvc), used by
+		     FaceAuthClientConfig when atw.face-auth.provider=python -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-restclient</artifactId>
+		</dependency>
 
 		<!-- Flyway database migrations (versions managed by Spring Boot BOM) -->
 		<!-- spring-boot-flyway carries the Boot 4 auto-configuration that runs

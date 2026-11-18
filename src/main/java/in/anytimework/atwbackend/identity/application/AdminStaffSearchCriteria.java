@@ -16,6 +16,8 @@ public record AdminStaffSearchCriteria(
         Set<AdminStatus> statuses,
         Set<UUID> roleIds,
         Boolean superAdmin,
-        String search
+        String search,
+        Set<UUID> stateId,
+        Set<UUID> cityId
 ) {
 }
