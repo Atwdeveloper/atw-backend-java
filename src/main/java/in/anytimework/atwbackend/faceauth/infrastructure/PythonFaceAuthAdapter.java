@@ -58,9 +58,16 @@ class PythonFaceAuthAdapter implements FaceAuthPort {
 
     @Override
     public FaceEmbeddingResult embed(byte[] imageBytes, String contentType) {
+        // The part needs an explicit filename - the real service's /v1/embed takes `image` as a
+        // FastAPI UploadFile, and Starlette only parses a multipart part as a file (vs. a plain form
+        // field) when Content-Disposition carries a filename. ByteArrayResource has none of its own, so
+        // without this the upload silently fails Pydantic validation with a generic 422 instead of
+        // reaching the face-detection logic at all - confirmed live 2026-11-18.
+        MediaType mediaType = MediaType.parseMediaType(contentType);
         MultipartBodyBuilder multipart = new MultipartBodyBuilder();
         multipart.part("image", new ByteArrayResource(imageBytes))
-                .contentType(MediaType.parseMediaType(contentType));
+                .filename("face." + mediaType.getSubtype())
+                .contentType(mediaType);
 
         EmbedSuccessResponse response;
         try {
