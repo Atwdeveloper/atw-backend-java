@@ -20,10 +20,18 @@ public record AdminUserAddressResponse(
                 example = "4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2", nullable = true)
         UUID stateId,
 
+        @Schema(description = "Resolved state name, for display - null exactly when stateId is null. Edit using "
+                + "stateId, not this.", example = "Rajasthan", nullable = true)
+        String stateName,
+
         @Schema(description = "City id - a foreign key into Masterdata > Geography > List Cities (district-grain; "
                 + "ATW's product vocabulary calls it \"city\"), scoped under `stateId` above.",
                 example = "9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01", nullable = true)
         UUID cityId,
+
+        @Schema(description = "Resolved city name, for display - null exactly when cityId is null. Edit using "
+                + "cityId, not this.", example = "Jaipur", nullable = true)
+        String cityName,
 
         @Schema(description = "Postal/PIN code. No format validation.", example = "302001", nullable = true)
         String pincode,

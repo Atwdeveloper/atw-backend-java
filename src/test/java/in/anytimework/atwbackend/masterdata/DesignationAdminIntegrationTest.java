@@ -16,6 +16,7 @@ import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.masterdata.application.SkillCategoryService;
 import in.anytimework.atwbackend.masterdata.application.SkillService;
 import in.anytimework.atwbackend.shared.api.BulkActionResult;
+import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
@@ -311,13 +312,34 @@ class DesignationAdminIntegrationTest {
     @Test
     void create_withSkillCategory_assignsIt() {
         IndustryResponse industry = createIndustry("Textiles");
-        SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest("Unskilled " + unique()));
+        String categoryName = "Unskilled " + unique();
+        SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest(categoryName));
 
         DesignationResponse created = designationService.create(
                 new CreateDesignationRequest("Loom Operator " + unique(), Set.of(industry.id()), category.id()));
 
         assertThat(created.skillCategoryId()).isEqualTo(category.id());
+        assertThat(created.skillCategoryName()).isEqualTo(categoryName);
         assertThat(designationService.get(created.id()).skillCategoryId()).isEqualTo(category.id());
+        assertThat(designationService.get(created.id()).skillCategoryName()).isEqualTo(categoryName);
+    }
+
+    @Test
+    void list_resolvesSkillCategoryNameForEveryRow() {
+        // Exercises the batched resolution path (list() pre-resolves all names in one query), not the
+        // single-row one get()/create() use - a real risk of an N+1 query if ever done per row instead.
+        IndustryResponse industry = createIndustry("Plastics " + unique());
+        String categoryName = "Semi-Skilled " + unique();
+        SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest(categoryName));
+        DesignationResponse created = designationService.create(
+                new CreateDesignationRequest("Molder " + unique(), Set.of(industry.id()), category.id()));
+
+        PageResponse<DesignationResponse> page = designationService.list(
+                new DesignationSearchCriteria(Set.of(industry.id()), null, null, null), PageRequest.of(0, 10));
+
+        assertThat(page.content()).filteredOn(d -> d.id().equals(created.id()))
+                .singleElement()
+                .satisfies(d -> assertThat(d.skillCategoryName()).isEqualTo(categoryName));
     }
 
     @Test
@@ -338,16 +360,20 @@ class DesignationAdminIntegrationTest {
     @Test
     void assignSkillCategory_thenClear_roundTrips() {
         IndustryResponse industry = createIndustry("Furniture");
-        SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest("Carpentry " + unique()));
+        String categoryName = "Carpentry " + unique();
+        SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest(categoryName));
         DesignationResponse created = designationService.create(
                 new CreateDesignationRequest("Cabinet Maker " + unique(), Set.of(industry.id()), null));
         assertThat(created.skillCategoryId()).isNull();
+        assertThat(created.skillCategoryName()).isNull();
 
         DesignationResponse assigned = designationService.assignSkillCategory(created.id(), category.id());
         assertThat(assigned.skillCategoryId()).isEqualTo(category.id());
+        assertThat(assigned.skillCategoryName()).isEqualTo(categoryName);
 
         DesignationResponse cleared = designationService.clearSkillCategory(created.id());
         assertThat(cleared.skillCategoryId()).isNull();
+        assertThat(cleared.skillCategoryName()).isNull();
     }
 
     @Test

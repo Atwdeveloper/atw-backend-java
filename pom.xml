@@ -209,6 +209,19 @@
 			<artifactId>awaitility</artifactId>
 			<scope>test</scope>
 		</dependency>
+
+		<!-- Apache POI: .xlsx writing engine for the shared ExcelWriter export utility (shared.export).
+		     No Spring Boot starter exists for this, so the version is pinned explicitly rather than BOM-managed. -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi</artifactId>
+			<version>5.5.1</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml</artifactId>
+			<version>5.5.1</version>
+		</dependency>
 	</dependencies>
 
 	<build>

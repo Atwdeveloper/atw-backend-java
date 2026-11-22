@@ -148,7 +148,7 @@ public class AdminWorkerFaceEnrollmentController {
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "The photo confidently matches a different worker's existing enrollment - nothing was persisted",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(name = "duplicate-face", value = """
-                            { "success": false, "data": null, "error": { "code": "CONFLICT", "message": "This face is already enrolled to worker 99999999-9999-4999-8999-999999999999 (similarity 0.91) - a face can only be enrolled once.", "fieldErrors": null, "timestamp": "2026-11-17T06:40:00Z", "traceId": "a1b2c3d4e5f60718" } }"""))),
+                            { "success": false, "data": null, "error": { "code": "CONFLICT", "message": "This face is already enrolled to Ramesh Kumar (WRK0000042), with a similarity score of 0.91 - a face can only be enrolled once.", "fieldErrors": null, "timestamp": "2026-11-17T06:40:00Z", "traceId": "a1b2c3d4e5f60718" } }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "The face-auth provider rejected the photo itself - nothing was persisted",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = {
                             @ExampleObject(name = "quality-insufficient", value = """
@@ -219,9 +219,9 @@ public class AdminWorkerFaceEnrollmentController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Comparison completed (see matched/ambiguous for the actual outcome - this is 200 either way).",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = FaceIdentificationResult.class), examples = {
                             @ExampleObject(name = "confident-match", value = """
-                                    { "success": true, "data": { "matched": true, "workerId": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "bestScore": 0.87, "ambiguous": false, "topMatches": [ { "workerId": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "score": 0.87 }, { "workerId": "99999999-9999-4999-8999-999999999999", "score": 0.41 } ] }, "error": null }"""),
+                                    { "success": true, "data": { "matched": true, "workerId": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "workerName": "Ramesh Kumar", "bestScore": 0.87, "ambiguous": false, "topMatches": [ { "workerId": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "workerName": "Ramesh Kumar", "score": 0.87 }, { "workerId": "99999999-9999-4999-8999-999999999999", "workerName": "Priya Sharma", "score": 0.41 } ] }, "error": null }"""),
                             @ExampleObject(name = "no-confident-match", value = """
-                                    { "success": true, "data": { "matched": false, "workerId": null, "bestScore": 0.33, "ambiguous": false, "topMatches": [ { "workerId": "99999999-9999-4999-8999-999999999999", "score": 0.33 } ] }, "error": null }""")
+                                    { "success": true, "data": { "matched": false, "workerId": null, "workerName": null, "bestScore": 0.33, "ambiguous": false, "topMatches": [ { "workerId": "99999999-9999-4999-8999-999999999999", "workerName": "Priya Sharma", "score": 0.33 } ] }, "error": null }""")
                     })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "Nobody is enrolled yet, or the uploaded photo itself failed quality/liveness - see message.",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = {

@@ -23,6 +23,7 @@ import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.export.ExcelWriter;
 import in.anytimework.atwbackend.shared.kernel.Address;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
@@ -56,11 +57,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -75,7 +76,7 @@ import java.util.stream.Collectors;
 
 /**
  * Worker core profile: create/update, designation/skill assignment, status lifecycle, search/list,
- * bulk status/delete, CSV export. Address/bank-detail/notes live in their own sibling services
+ * bulk status/delete, Excel export. Address/bank-detail/notes live in their own sibling services
  * ({@link WorkerAddressService}, {@link WorkerBankDetailService}, {@link WorkerNoteService}),
  * matching how the identity module splits {@code AdminStaffService} from its own address/KYC/
  * bank-detail services. Authorization ({@code workers.view/create/edit/toggle_status/delete/export})
@@ -91,10 +92,10 @@ public class WorkerService {
     /** Reached only automatically (worker creation / KYC submission) - never a valid admin-chosen target via updateStatus. */
     private static final Set<WorkerStatus> NOT_DIRECTLY_SETTABLE =
             EnumSet.of(WorkerStatus.REGISTERED, WorkerStatus.KYC_PENDING);
-    private static final String[] CSV_HEADER = {
+    private static final List<String> EXPORT_HEADER = List.of(
             "Worker Code", "First Name", "Last Name", "Mobile Number", "Status", "KYC Status", "Designation", "Department",
             "Current City", "Current State", "Permanent City", "Permanent State", "Face Enrolled"
-    };
+    );
     /**
      * Real, directly queryable scalar columns only - see {@link SortValidation}'s Javadoc for why.
      * Notably excludes {@code kycStatus} and {@code faceEnrolledAt} (each a different module's table,
@@ -180,7 +181,7 @@ public class WorkerService {
     /**
      * Every column/subquery filter in {@code criteria} that is non-empty becomes one predicate,
      * ANDed together via {@link Specifications#allOf}. Shared by {@link #list} and
-     * {@link #exportToCsv} so both honor the exact same filter semantics.
+     * {@link #exportToExcel} so both honor the exact same filter semantics.
      *
      * <p>Returns {@link Optional#empty()} when the {@code kycStatus} filter itself resolves to zero
      * matching worker ids: {@code kyc} is a separate module, so that filter can only be applied as a
@@ -389,7 +390,7 @@ public class WorkerService {
      * Soft-deletes a worker: sets {@code deletedAt} (via {@link Worker#markDeleted}) rather than ever
      * issuing a real SQL DELETE. {@link Worker}'s {@code @SQLRestriction("deleted_at is null")} then
      * makes this worker invisible to every existing query path - {@link #get}, {@link #list},
-     * {@link #exportToCsv}, {@code existsByMobileNumber(AndIdNot)}, the pessimistic-lock JPQL in
+     * {@link #exportToExcel}, {@code existsByMobileNumber(AndIdNot)}, the pessimistic-lock JPQL in
      * {@code WorkerRepository.findByIdForUpdate} - automatically, with no other method in this class
      * needing to check a "deleted" flag itself. See {@code Worker}'s class-level Javadoc for why this
      * is correct for every one of those paths, not just the obvious ones.
@@ -461,28 +462,43 @@ public class WorkerService {
     }
 
     /**
-     * CSV export for the admin worker list. Exports exactly {@code ids} when given and non-empty
-     * (unknown ids are silently skipped, same as a plain {@code findAllById} would); otherwise falls
-     * back to every worker matching {@code criteria} (the exact same filter semantics as {@link #list},
-     * via the shared {@link #buildPredicates}, just unpaged). Plain {@link StringBuilder}/byte output,
-     * not Apache POI: a CSV is a flat table with no formatting requirement, so a heavier Excel-writing
-     * dependency buys nothing here and this streams more cheaply for a potentially large export.
+     * Excel (.xlsx) export for the admin worker list. Exports exactly {@code ids} when given and
+     * non-empty (unknown ids are silently skipped, same as a plain {@code findAllById} would);
+     * otherwise falls back to every worker matching {@code criteria} (the exact same filter semantics
+     * as {@link #list}, via the shared {@link #buildPredicates}, just unpaged). Delegates the actual
+     * workbook serialization to the shared {@link ExcelWriter} - the same utility every other module's
+     * admin-list export uses - rather than hand-rolling Apache POI calls here.
      *
-     * <p>Builds the whole CSV in memory rather than streaming row-by-row to the HTTP response: simple
-     * and correct for this feature's current scale (an admin tool, no attendance/payroll volume yet),
-     * called out here as a known, deliberate limitation rather than a true database-cursor export - if
-     * the worker table grows to a size where that matters, this should move to a streaming response
-     * instead of a larger in-memory buffer.</p>
+     * <p>Builds the whole workbook in memory rather than streaming row-by-row to the HTTP response:
+     * simple and correct for this feature's current scale (an admin tool, no attendance/payroll volume
+     * yet), called out here as a known, deliberate limitation rather than a true database-cursor
+     * export - if the worker table grows to a size where that matters, this should move to a streaming
+     * response instead of a larger in-memory buffer.</p>
      */
     @Transactional(readOnly = true)
-    public byte[] exportToCsv(Set<UUID> ids, WorkerSearchCriteria criteria) {
+    public byte[] exportToExcel(Set<UUID> ids, WorkerSearchCriteria criteria) {
         List<Worker> workerList = (ids != null && !ids.isEmpty())
                 ? workers.findAllById(ids)
-                : buildPredicates(criteria).map(predicates -> workers.findAll(Specifications.allOf(predicates))).orElse(List.of());
-        return toCsv(workerList);
+                : buildPredicates(criteria).map(this::findAllMatching).orElse(List.of());
+        return toExcelBytes(workerList);
     }
 
-    private byte[] toCsv(List<Worker> workerList) {
+    /**
+     * {@link Specifications#allOf} returns {@code null} for an empty predicate list (meaning "no
+     * filter at all") - safe to pass into the paged {@code findAll(Specification, Pageable)} overload
+     * {@link #list} uses, but the unpaged single-arg {@code findAll(Specification)} overload used by
+     * an unfiltered export throws {@code InvalidDataAccessApiUsageException: Specification must not
+     * be null} instead of treating it the same way - the exact ambiguous-overload gotcha
+     * {@link Specifications}'s own class Javadoc documents, just not yet worked around at this unpaged
+     * call site. Call the plain, filter-less {@code findAll()} instead whenever there is nothing to
+     * filter on, rather than ever passing a null {@link Specification} into the unpaged overload.
+     */
+    private List<Worker> findAllMatching(List<Specification<Worker>> predicates) {
+        Specification<Worker> spec = Specifications.allOf(predicates);
+        return spec == null ? workers.findAll() : workers.findAll(spec);
+    }
+
+    private byte[] toExcelBytes(List<Worker> workerList) {
         Set<UUID> workerIds = workerList.stream().map(Worker::getId).collect(Collectors.toSet());
         Map<UUID, UUID> primaryDesignationIdByWorker = primaryDesignationIdByWorker(workerIds);
         Map<UUID, String> designationNameById = designationNameById();
@@ -491,40 +507,20 @@ public class WorkerService {
         Map<UUID, Instant> faceEnrolledAtByWorker = faceAuthService.getEnrollmentDates(workerIds);
         WorkerAddressNames addressNames = addressNamesByWorker(workerIds);
 
-        StringBuilder csv = new StringBuilder();
-        csv.append(String.join(",", CSV_HEADER)).append("\r\n");
+        List<List<Object>> rows = new ArrayList<>(workerList.size());
         for (Worker w : workerList) {
             UUID primaryDesignationId = primaryDesignationIdByWorker.get(w.getId());
             String designationName = primaryDesignationId == null ? null : designationNameById.get(primaryDesignationId);
             String departmentName = departmentNameById.get(w.getDepartmentId());
             KycStatus kycStatus = kycStatusByWorker.getOrDefault(w.getId(), KycStatus.NOT_STARTED);
             boolean faceEnrolled = faceEnrolledAtByWorker.containsKey(w.getId());
-            csv.append(csvField(w.getWorkerCode())).append(',')
-                    .append(csvField(w.getFirstName())).append(',')
-                    .append(csvField(w.getLastName())).append(',')
-                    .append(csvField(w.getMobileNumber())).append(',')
-                    .append(csvField(w.getStatus().name())).append(',')
-                    .append(csvField(kycStatus.name())).append(',')
-                    .append(csvField(designationName)).append(',')
-                    .append(csvField(departmentName)).append(',')
-                    .append(csvField(addressNames.currentCity().get(w.getId()))).append(',')
-                    .append(csvField(addressNames.currentState().get(w.getId()))).append(',')
-                    .append(csvField(addressNames.permanentCity().get(w.getId()))).append(',')
-                    .append(csvField(addressNames.permanentState().get(w.getId()))).append(',')
-                    .append(csvField(faceEnrolled ? "Yes" : "No")).append("\r\n");
+            rows.add(Arrays.<Object>asList(w.getWorkerCode(), w.getFirstName(), w.getLastName(), w.getMobileNumber(),
+                    w.getStatus().name(), kycStatus.name(), designationName, departmentName,
+                    addressNames.currentCity().get(w.getId()), addressNames.currentState().get(w.getId()),
+                    addressNames.permanentCity().get(w.getId()), addressNames.permanentState().get(w.getId()),
+                    faceEnrolled ? "Yes" : "No"));
         }
-        return csv.toString().getBytes(StandardCharsets.UTF_8);
-    }
-
-    /** Quotes a field only when it contains a character that would otherwise break the CSV format (RFC 4180). */
-    private static String csvField(String value) {
-        if (value == null) {
-            return "";
-        }
-        if (value.indexOf(',') < 0 && value.indexOf('"') < 0 && value.indexOf('\n') < 0 && value.indexOf('\r') < 0) {
-            return value;
-        }
-        return "\"" + value.replace("\"", "\"\"") + "\"";
+        return ExcelWriter.write("Workers", EXPORT_HEADER, rows);
     }
 
     @Transactional
@@ -612,7 +608,7 @@ public class WorkerService {
         }
         for (UUID designationId : designationIds) {
             if (!designationLookup.exists(designationId)) {
-                throw new ValidationException("Unknown designation id: " + designationId);
+                throw new ValidationException("Unknown designation.");
             }
         }
     }
@@ -620,7 +616,7 @@ public class WorkerService {
     private void validateSkillSelection(Set<UUID> skillIds, Set<UUID> designationIds) {
         for (UUID skillId : skillIds) {
             if (!skillLookup.exists(skillId)) {
-                throw new ValidationException("Unknown skill id: " + skillId);
+                throw new ValidationException("Unknown skill.");
             }
             SkillSummary skill = skillLookup.get(skillId);
             if (!designationIds.contains(skill.designationId())) {

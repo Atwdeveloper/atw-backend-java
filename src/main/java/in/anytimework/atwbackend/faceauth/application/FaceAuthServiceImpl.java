@@ -9,6 +9,8 @@ import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollmentRepository;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,7 @@ import java.util.stream.Collectors;
 @Service
 class FaceAuthServiceImpl implements FaceAuthService {
 
+    private static final Logger log = LoggerFactory.getLogger(FaceAuthServiceImpl.class);
     private static final int EMBEDDING_DIMENSIONS = 128;
     private static final int MAX_TOP_MATCHES = 5;
     private static final Duration PHOTO_URL_VALIDITY = Duration.ofMinutes(15);
@@ -36,18 +39,20 @@ class FaceAuthServiceImpl implements FaceAuthService {
     private final DocumentService documentService;
     private final FaceIdentifyProperties identifyProperties;
     private final FaceDuplicateProperties duplicateProperties;
+    private final WorkerDisplayLookup workerDisplayLookup;
     private final Clock clock;
 
     FaceAuthServiceImpl(WorkerFaceEnrollmentRepository enrollments, FaceAuthPort faceAuthPort,
                         FaceEnrollmentPhotoSupport photoSupport, DocumentService documentService,
                         FaceIdentifyProperties identifyProperties, FaceDuplicateProperties duplicateProperties,
-                        Clock clock) {
+                        WorkerDisplayLookup workerDisplayLookup, Clock clock) {
         this.enrollments = enrollments;
         this.faceAuthPort = faceAuthPort;
         this.photoSupport = photoSupport;
         this.documentService = documentService;
         this.identifyProperties = identifyProperties;
         this.duplicateProperties = duplicateProperties;
+        this.workerDisplayLookup = workerDisplayLookup;
         this.clock = clock;
     }
 
@@ -152,15 +157,22 @@ class FaceAuthServiceImpl implements FaceAuthService {
             throw new BusinessRuleException("Liveness check failed - please retake the photo in person.");
         }
 
-        List<FaceIdentificationCandidate> ranked = rankCandidates(probe.embedding(), candidates);
+        List<RankedMatch> ranked = rankCandidates(probe.embedding(), candidates);
 
-        FaceIdentificationCandidate best = ranked.get(0);
+        RankedMatch best = ranked.get(0);
         double runnerUpScore = ranked.size() > 1 ? ranked.get(1).score() : Double.NEGATIVE_INFINITY;
         boolean ambiguous = (best.score() - runnerUpScore) < identifyProperties.margin();
         boolean matched = !ambiguous && best.score() >= identifyProperties.threshold();
 
-        List<FaceIdentificationCandidate> topMatches = ranked.stream().limit(MAX_TOP_MATCHES).toList();
-        return new FaceIdentificationResult(matched, matched ? best.workerId() : null, best.score(), ambiguous, topMatches);
+        List<RankedMatch> topRanked = ranked.stream().limit(MAX_TOP_MATCHES).toList();
+        Map<UUID, WorkerDisplayInfo> displayInfoById = workerDisplayLookup.findByIds(
+                topRanked.stream().map(RankedMatch::workerId).collect(Collectors.toSet()));
+        List<FaceIdentificationCandidate> topMatches = topRanked.stream()
+                .map(r -> new FaceIdentificationCandidate(r.workerId(), nameOf(displayInfoById, r.workerId()), r.score()))
+                .toList();
+        String matchedName = matched ? nameOf(displayInfoById, best.workerId()) : null;
+        return new FaceIdentificationResult(matched, matched ? best.workerId() : null, matchedName, best.score(),
+                ambiguous, topMatches);
     }
 
     /**
@@ -168,16 +180,12 @@ class FaceAuthServiceImpl implements FaceAuthService {
      * confidently matches an already-enrolled, not-excluded DIFFERENT worker - same unconditional
      * every-enroll check and same outright-reject behavior as legacy's
      * {@code FaceAuthService::findDuplicateFace}: nothing is saved, and the error names the
-     * conflicting worker's id and the similarity score so the admin can look it up and decide what to
-     * do. {@code workerId} itself is excluded from the comparison set in Java (not by the repository
-     * query) - re-enrolling yourself must never trip over your own prior photo, exactly like legacy
-     * excludes {@code excludeWorkerId}.
-     *
-     * <p>Deliberately does not denormalize the conflicting worker's name/code into this message the way
-     * legacy's PHP does (it loads {@code worker:id,first_name,last_name,worker_code} via an Eloquent
-     * relationship) - this module is not allowed to reach into {@code worker}'s table directly, and the
-     * admin frontend already has a cheap way to resolve a worker id to a name (the existing worker-GET
-     * endpoint), so no new cross-module dependency is needed just for a display string.</p>
+     * conflicting worker - resolved to a display name/code via {@link WorkerDisplayLookup}, never a
+     * raw id (see that interface's Javadoc for how this module reaches worker data without a cyclic
+     * module dependency) - plus the similarity score, so the admin can find that worker and decide
+     * what to do. {@code workerId} itself is excluded from the comparison set in Java (not by the
+     * repository query) - re-enrolling yourself must never trip over your own prior photo, exactly
+     * like legacy excludes {@code excludeWorkerId}.
      */
     private void rejectIfDuplicate(UUID workerId, float[] newEmbedding) {
         List<WorkerFaceEnrollment> others = enrollments.findByExcludedFromMatchingAtIsNull().stream()
@@ -186,20 +194,43 @@ class FaceAuthServiceImpl implements FaceAuthService {
         if (others.isEmpty()) {
             return;
         }
-        FaceIdentificationCandidate best = rankCandidates(newEmbedding, others).get(0);
+        RankedMatch best = rankCandidates(newEmbedding, others).get(0);
         if (best.score() >= duplicateProperties.threshold()) {
+            WorkerDisplayInfo info = workerDisplayLookup.findByIds(Set.of(best.workerId())).get(best.workerId());
+            String reference;
+            if (info != null) {
+                reference = info.fullName() + " (" + info.workerCode() + ")";
+            } else {
+                log.warn("Duplicate-face check matched enrolled workerId {} that WorkerDisplayLookup could not "
+                        + "resolve to a name - showing a generic reference instead.", best.workerId());
+                reference = "another enrolled worker";
+            }
             throw new ConflictException(String.format(Locale.ROOT,
-                    "This face is already enrolled to worker %s (similarity %.2f) - a face can only be enrolled once.",
-                    best.workerId(), best.score()));
+                    "This face is already enrolled to %s, with a similarity score of %.2f - a face can only be "
+                            + "enrolled once.", reference, best.score()));
         }
     }
 
-    /** Shared by {@link #identify} and {@link #rejectIfDuplicate} - both are "rank every candidate by cosine similarity to one probe embedding", just applied to a different candidate set and decision. */
-    private static List<FaceIdentificationCandidate> rankCandidates(float[] probeEmbedding, List<WorkerFaceEnrollment> candidates) {
+    /**
+     * Shared by {@link #identify} and {@link #rejectIfDuplicate} - both are "rank every candidate by
+     * cosine similarity to one probe embedding", just applied to a different candidate set and
+     * decision. Internal only: unlike the public {@link FaceIdentificationCandidate}, never carries a
+     * resolved name - a per-candidate lookup here would mean one {@link WorkerDisplayLookup} call per
+     * candidate; callers batch-resolve names once, after ranking, instead.
+     */
+    private static List<RankedMatch> rankCandidates(float[] probeEmbedding, List<WorkerFaceEnrollment> candidates) {
         return candidates.stream()
-                .map(c -> new FaceIdentificationCandidate(c.getWorkerId(), cosineSimilarity(probeEmbedding, c.getEmbedding())))
-                .sorted(Comparator.comparingDouble(FaceIdentificationCandidate::score).reversed())
+                .map(c -> new RankedMatch(c.getWorkerId(), cosineSimilarity(probeEmbedding, c.getEmbedding())))
+                .sorted(Comparator.comparingDouble(RankedMatch::score).reversed())
                 .toList();
+    }
+
+    private record RankedMatch(UUID workerId, double score) {
+    }
+
+    private static String nameOf(Map<UUID, WorkerDisplayInfo> displayInfoById, UUID workerId) {
+        WorkerDisplayInfo info = displayInfoById.get(workerId);
+        return info == null ? null : info.fullName();
     }
 
     /**

@@ -104,7 +104,7 @@ class DocumentServiceImpl implements DocumentService {
 
     private Document getOrThrow(UUID id) {
         return repository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Document not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Document not found"));
     }
 
     private void validate(UploadDocumentCommand command) {

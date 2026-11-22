@@ -521,10 +521,12 @@ public class AdminStaffController {
     @GetMapping("/{id}/address")
     @PreAuthorize("@authz.has('admin_staff.view')")
     @Operation(summary = "Get a staff member's address",
-            description = "Returns `{line1, line2, stateId, cityId, pincode, latitude, longitude, formattedAddress}`. "
-                    + "`stateId`/`cityId` reference the Masterdata > Geography lookup tables rather than a free-text "
-                    + "state/city name. `latitude`/`longitude`/`formattedAddress` are groundwork for a future "
-                    + "geocoding integration - always `null` today, not yet settable through this API.\n\n"
+            description = "Returns `{line1, line2, stateId, stateName, cityId, cityName, pincode, latitude, "
+                    + "longitude, formattedAddress}`. `stateId`/`cityId` are foreign keys into the Masterdata > "
+                    + "Geography lookup tables; `stateName`/`cityName` are resolved server-side purely for display "
+                    + "- edit using the ids, never the names. `latitude`/`longitude`/`formattedAddress` are "
+                    + "groundwork for a future geocoding integration - always `null` today, not yet settable "
+                    + "through this API.\n\n"
                     + "If no address has ever been saved for this staff member, this returns an all-`null` object, "
                     + "**not** a 404 - mirrors Get Staff Profile's \"every field null until set\" behavior. "
                     + "`line1`/`line2` are stored as **plain text, not encrypted** (a deliberate 2026-11-13 change) "
@@ -539,7 +541,9 @@ public class AdminStaffController {
                                 "line1": "221B Test Street",
                                 "line2": null,
                                 "stateId": "4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2",
+                                "stateName": "Rajasthan",
                                 "cityId": "9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01",
+                                "cityName": "Jaipur",
                                 "pincode": "302001",
                                 "latitude": null,
                                 "longitude": null,
@@ -585,7 +589,9 @@ public class AdminStaffController {
                                 "line1": "221B Test Street",
                                 "line2": null,
                                 "stateId": "4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2",
+                                "stateName": "Rajasthan",
                                 "cityId": "9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01",
+                                "cityName": "Jaipur",
                                 "pincode": "302001",
                                 "latitude": null,
                                 "longitude": null,

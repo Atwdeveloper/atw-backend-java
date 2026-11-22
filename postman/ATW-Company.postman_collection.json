@@ -1,0 +1,1138 @@
+{
+  "info": {
+    "name": "ATW Backend — Company",
+    "description": "# ATW Backend — Company\n\nAdmin-facing company lifecycle management: company CRUD (with automatic OWNER login-account provisioning + invite email on create), the `PENDING_VERIFICATION → ACTIVE ⇄ SUSPENDED`/`REJECTED` approval-status lifecycle (single + bulk), GST-number verification against a real vendor, the address sub-resource (a company's registered office plus any number of branches), bulk delete, and Excel (.xlsx) export.\n\nCompany **documents** and the company-user **self-service login/auth flow** (accept-invite, login, OTP, refresh, etc.) are a separate, not-yet-built module slice - every endpoint below is admin-side only. Company creation always provisions exactly one OWNER account and queues it an invite email, but accepting that invite is out of scope here.\n\n**Run order:** Get a bearer token first (Login / Verify OTP in ATW-Auth-Account), then seed an Industry from ATW-Masterdata (`{{industryId}}`) - Create Company needs a real one. State/city ids (`{{stateId}}`/`{{cityId}}`) are pre-seeded reference data (36 states/UTs, 784 districts) - see ATW-Masterdata's Geography folder if you need to look one up. Company Profile's **Create Company** then populates `{{companyId}}`, which every other folder in this collection depends on; Company Addresses' **Add Company Address** similarly populates `{{addressId}}`. Save **Company Deletion** for last - several requests above need `{{companyId}}` to still exist, and Delete additionally needs the company's status to already be something other than `ACTIVE` (Company Status's own **Change Company Status** request, earlier in this run, already takes care of that).\n\n**Shared conventions across every request in this collection:**\n- Every endpoint requires `Authorization: Bearer {{accessToken}}` **and** its own specific `company.*` permission - there is no endpoint here usable by a bare authenticated caller.\n- `{id}` in every path below is a company id (UUID); an unknown one always comes back `404 RESOURCE_NOT_FOUND`, message \"Company not found\" - documented once here, not repeated on every request.\n- Two response shapes exist for a company: the full `CompanyResponse` (Get Company, and every write endpoint that returns one - owner reference, every address) and the lighter `CompanySummaryResponse` (the List row - no owner, no addresses).\n- GST/PAN numbers are encrypted at rest and **masked** in every response (e.g. `**********1234`) unless the caller also holds `company.view_sensitive` - same sensitivity gate the `kyc`/`worker` modules use for their own sensitive numbers. This applies to Get/List/Create/Update responses **and** to the Excel export's GST Number/PAN Number columns.\n- Status changes always take an **explicit target status** (`company.manage_status`), never a blind toggle - single or bulk. Allowed transitions: `PENDING_VERIFICATION ⇄ REJECTED`, `PENDING_VERIFICATION → ACTIVE`, `ACTIVE ⇄ SUSPENDED` - every other pair (including `REJECTED → ACTIVE` directly, and `ACTIVE → REJECTED`) is rejected. A `reason` is required for `SUSPENDED`/`REJECTED`. Moving to `SUSPENDED`/`REJECTED` disables every one of the company's login accounts and revokes every one of their refresh tokens in the same transaction; moving back to `ACTIVE` re-enables them.\n- Deleting a **company** is a **soft** delete (`deletedAt`) - never a real SQL `DELETE` - and is refused while the company is `ACTIVE` (change status first, e.g. to `SUSPENDED`). Every satellite row (addresses, status history, the company's own users and their tokens) is left untouched, preserving full history.\n- `POST .../bulk-status` and `POST .../bulk-delete` both take a batch of ids and process each independently, by calling the exact same guarded single-item logic per id - partial success is normal; check `data.failures[]` for which id was skipped and why - same convention as ATW-Masterdata/ATW-Worker's own bulk endpoints.\n- **Export returns a raw `.xlsx` file download** (`Content-Disposition: attachment; filename=\"companies.xlsx\"`), **NOT** the usual JSON envelope - this is the only endpoint in this collection that isn't JSON. Give `ids` for an exact set, or any combination of List Companies' own filters to export a filtered set; post `{}` to export every company.\n- A company's addresses are a genuinely variable-length list (one registered office plus any number of branches, unlike a worker's fixed 2 rows) - full sub-resource CRUD, one address at a time. Exactly one address is primary at all times once a company has any; deleting the primary auto-promotes the next-oldest survivor, and a company can never be left with zero addresses (its last one can't be deleted) or with its current primary unset with no replacement promoted in the same call.\n- GST verification calls a real vendor (Sandbox.co.in's GST Compliance API) in production - see `HANDOVER.md` for the Azure configuration required to turn this on (it defaults to a deterministic stub everywhere until then).\n\nEvery JSON endpoint is versioned under `/api/v1/` and returns the same envelope:\n\n```\n{ \"success\": boolean, \"data\": <payload> | null, \"error\": <ApiError> | null }\n```\n\n`ApiError` shape: `{\"code\": string, \"message\": string, \"fieldErrors\": [{\"field\",\"message\"}] | null, \"timestamp\": ISO-8601 string, \"traceId\": string | null}`. `traceId` echoes the `X-Correlation-Id` request header when present.\n\n## Running this collection\n\nSelect the **ATW Backend - Local** environment first.\n\n1. Run **Login** / **Verify OTP** from **ATW-Auth-Account.postman_collection.json** to populate `{{accessToken}}` - every request below requires it, plus its own `company.*` permission.\n2. From **ATW-Masterdata.postman_collection.json**, run **Create Industry** (→ `{{industryId}}`) - Create Company needs a real one. `{{stateId}}`/`{{cityId}}` are pre-seeded reference data; look one up via Masterdata's Geography folder if not already set in your environment.\n3. **Company Profile → Create Company** populates `{{companyId}}` - every folder below needs it.\n4. **Company Addresses → Add Company Address** populates `{{addressId}}`.\n5. **Company Status**, **Company GST Verification**, and the rest of **Company Addresses** can then run in any order against the same `{{companyId}}`.\n6. Run **Company Deletion** (**Delete Company** / **Bulk Delete Companies**) **last** - several folders above need `{{companyId}}` to still exist, and Delete additionally needs the company's status to already be something other than `ACTIVE` (Company Status's own **Change Company Status** request, earlier in this run, already takes care of that).\n\n## Error codes that can appear on (almost) any endpoint\n\nThese are produced centrally - by `GlobalExceptionHandler`, by Spring Security's entry point/access-denied handler, or by security filters that run before a controller is even reached - so they are **not** re-documented on every individual request below; only an endpoint's *specific* codes/triggers are.\n\n| Code | HTTP | Meaning |\n|---|---|---|\n| `VALIDATION_ERROR` | 400 | A `@Valid` request-body field failed Bean Validation (`fieldErrors[]` present), or a service-level input check failed (no `fieldErrors`). |\n| `MALFORMED_REQUEST` | 400 | Request body is missing or isn't valid JSON. |\n| `UNAUTHENTICATED` | 401 | No bearer token presented at all, or it's malformed/expired/signature-invalid. |\n| `SESSION_REVOKED` | 401 | The token parses fine, but the admin's security version has moved on since it was issued (password changed, account disabled) - discard tokens and log in again. |\n| `ACCESS_DENIED` | 403 | Authenticated, but lacking the specific `company.*` permission the endpoint requires. |\n| `RESOURCE_NOT_FOUND` | 404 | The id in the URL doesn't exist. |\n| `BUSINESS_RULE_VIOLATION` | 422 | Input is syntactically well-formed but violates a business rule (e.g. deleting an ACTIVE company, an illegal status transition, unsetting the only primary address, deleting a company's last address). |\n| `CONFLICT` | 409 | A duplicate check failed (GST/PAN/owner email already in use) - either a friendly pre-check, or a generic last-resort fallback when a unique-constraint violation reaches the database despite an earlier check passing (a genuine race between two concurrent requests). |\n| `INTERNAL_ERROR` | 500 | Unexpected failure. Full detail is logged server-side against the same `traceId` returned to the client. |\n\n## Documentation cross-references\n\n- **ATW-Auth-Account.postman_collection.json** - login/2FA; needed for `{{accessToken}}` before anything here will work.\n- **ATW-RBAC-Staff.postman_collection.json** - grant a role the `company.*` permissions this collection exercises. None are auto-granted to any role by default, including the brand-new `company.manage_status`/`company.delete`/`company.export` this round adds real endpoints for (the permission codes themselves were already seeded when the module first shipped).\n- **ATW-Masterdata.postman_collection.json** - industries/geography; Create Company and the address endpoints reference ids created/seeded there (`{{industryId}}`, `{{stateId}}`, `{{cityId}}`).\n- `HANDOVER.md` - Azure deployment context, including the GST-verification vendor's required configuration (and the same requirement for the two sibling Sandbox.co.in integrations, Aadhaar e-KYC and bank verification).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "item": [
+    {
+      "name": "Company Profile",
+      "description": "Core company CRUD under `/api/v1/admin/companies` - list/search, single-company detail, create (provisions the OWNER account + invite email in the same transaction), profile update, and Excel export. Permission is per request: `company.view` (List, Get), `company.create` (Create), `company.edit` (Update), `company.export` (Export). Status, addresses, and GST verification are **not** part of this folder - see the dedicated folders below for each. **Delete Company / Bulk Delete Companies live in the separate Company Deletion folder at the end of this collection** - run everything else first.",
+      "item": [
+        {
+          "name": "List Companies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies?status=ACTIVE&status=PENDING_VERIFICATION&search=Acme&gstVerified=true&createdFrom=2026-01-01&createdTo=2026-12-31&stateId={{stateId}}&cityId={{cityId}}&sort=createdAt,desc",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies"],
+              "query": [
+                {"key": "status", "value": "ACTIVE"},
+                {"key": "status", "value": "PENDING_VERIFICATION"},
+                {"key": "search", "value": "Acme"},
+                {"key": "gstVerified", "value": "true"},
+                {"key": "createdFrom", "value": "2026-01-01"},
+                {"key": "createdTo", "value": "2026-12-31"},
+                {"key": "stateId", "value": "{{stateId}}"},
+                {"key": "cityId", "value": "{{cityId}}"},
+                {"key": "sort", "value": "createdAt,desc"}
+              ]
+            },
+            "description": "**Permission:** `company.view`.\n\nPaginated, multiselect-filterable (`status`, `industryId`, `stateId`, `cityId`), free-text-searchable (`search` matches `name` or `companyCode`) list, returned as the lighter `CompanySummaryResponse` (no owner, no addresses - see Get Company for those). Default sort is `createdAt,desc`.\n\n**Filters** (all optional, all independent, repeat a query param for multiselect e.g. `?status=ACTIVE&status=PENDING_VERIFICATION`):\n- `status`, `industryId`, `stateId`, `cityId` - a non-empty filter matches ANY of its own values (OR within the filter); every non-empty filter is ANDed together with the others.\n- `stateId`/`cityId` (Masterdata ids, multiselect) - matches a company with ANY address referencing one of the given ids (no address-type split the way Worker has - a company's addresses carry no permanent/current distinction).\n- `search` - case-insensitive substring match against name or company code.\n- `gstVerified` (boolean) - `true` for GST-verified companies only, `false` for unverified only, omit for both.\n- `createdFrom`/`createdTo` (plain `YYYY-MM-DD` dates, either or both) - filters on the company's creation date, interpreted as whole UTC calendar days.\n\n**Pagination/sort:** standard Spring pagination (`page`, `size`, `sort`). `sort` only accepts real, directly-queryable columns: `name`, `companyCode`, `status`, `createdAt` - notably **not** `gstVerified`/`createdFrom`/`createdTo`/`stateId`/`cityId`, since none of those are columns on this table.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unsupported `sort` property | `VALIDATION_ERROR` | 400 |",
+            "body": null
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies?status=ACTIVE&search=Acme&sort=createdAt,desc",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies"],
+                  "query": [
+                    {"key": "status", "value": "ACTIVE"},
+                    {"key": "search", "value": "Acme"},
+                    {"key": "sort", "value": "createdAt,desc"}
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\",\n        \"companyCode\": \"CMP0000012\",\n        \"name\": \"Acme Builders Pvt Ltd\",\n        \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"status\": \"ACTIVE\",\n        \"createdAt\": \"2026-10-05T06:30:00Z\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 1,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - Unsupported sort property",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies?sort=gstVerified",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies"],
+                  "query": [{"key": "sort", "value": "gstVerified"}]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Cannot sort by 'gstVerified'. Allowed fields: companyCode, createdAt, name, status\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"293a4b5c6d7e0f18\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Company",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}"]
+            },
+            "description": "**Permission:** `company.view`.\n\nFull single-company detail, including the owner reference and every (non-deleted) address. `gstNumber`/`panNumber` come back masked (e.g. `**********1234`) unless the caller also holds `company.view_sensitive`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\",\n    \"companyCode\": \"CMP0000012\",\n    \"name\": \"Acme Builders Pvt Ltd\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"gstNumber\": \"**********1Z5\",\n    \"panNumber\": \"*****0987F\",\n    \"gstVerifiedAt\": null,\n    \"gstVerificationRef\": null,\n    \"status\": \"PENDING_VERIFICATION\",\n    \"statusReason\": null,\n    \"owner\": {\n      \"id\": \"5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d\",\n      \"name\": \"Rohan Mehta\",\n      \"email\": \"rohan.mehta@acmebuilders.example.com\"\n    },\n    \"addresses\": [\n      {\n        \"id\": \"9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b\",\n        \"addressType\": \"REGISTERED_OFFICE\",\n        \"primary\": true,\n        \"line1\": \"Tower B, 4th Floor\",\n        \"line2\": \"Cyber Hub\",\n        \"stateId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n        \"cityId\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\",\n        \"pincode\": \"122002\"\n      }\n    ],\n    \"createdAt\": \"2026-11-21T06:30:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown company id",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/00000000-0000-4000-8000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "00000000-0000-4000-8000-000000000000"]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Company not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create Company",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies"]
+            },
+            "description": "**Permission:** `company.create`.\n\nCreates the company (status `PENDING_VERIFICATION`, GST unverified) and its OWNER login account in one transaction, then enqueues an invite email to the owner (the async outbox path - a transient email-provider hiccup never rolls back the creation). GST/PAN are optional and never verified here - use Verify Company GST afterward (Company GST Verification folder).\n\n**Validation, checked in this order:**\n1. `industryId` must reference an existing industry.\n2. `ownerEmail` must not already belong to another company-user account.\n3. When given, `gstNumber`/`panNumber` must not already belong to another company.\n4. When `addresses` is non-empty, exactly one entry must have `primary=true`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown `industryId`, or `addresses` given with zero or more than one `primary=true` | `VALIDATION_ERROR` | 400 |\n| `ownerEmail` already in use by another company-user account | `CONFLICT` | 409 |\n| `gstNumber`/`panNumber` already belongs to another company | `CONFLICT` | 409 |\n\nThis request's Tests script saves the new id to `{{companyId}}` - every other folder in this collection needs it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Acme Builders Pvt Ltd\",\n  \"industryId\": \"{{industryId}}\",\n  \"gstNumber\": \"27AAAAA0000A1Z5\",\n  \"panNumber\": \"AAAAA0987F\",\n  \"addresses\": [\n    {\n      \"addressType\": \"REGISTERED_OFFICE\",\n      \"primary\": true,\n      \"line1\": \"Tower B, 4th Floor\",\n      \"line2\": \"Cyber Hub\",\n      \"stateId\": \"{{stateId}}\",\n      \"cityId\": \"{{cityId}}\",\n      \"pincode\": \"122002\"\n    }\n  ],\n  \"ownerName\": \"Rohan Mehta\",\n  \"ownerEmail\": \"rohan.mehta@acmebuilders.example.com\",\n  \"ownerPhone\": \"9876500000\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('companyId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Acme Builders Pvt Ltd\",\n  \"industryId\": \"{{industryId}}\",\n  \"gstNumber\": \"27AAAAA0000A1Z5\",\n  \"panNumber\": \"AAAAA0987F\",\n  \"addresses\": [\n    {\n      \"addressType\": \"REGISTERED_OFFICE\",\n      \"primary\": true,\n      \"line1\": \"Tower B, 4th Floor\",\n      \"line2\": \"Cyber Hub\",\n      \"stateId\": \"{{stateId}}\",\n      \"cityId\": \"{{cityId}}\",\n      \"pincode\": \"122002\"\n    }\n  ],\n  \"ownerName\": \"Rohan Mehta\",\n  \"ownerEmail\": \"rohan.mehta@acmebuilders.example.com\",\n  \"ownerPhone\": \"9876500000\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\",\n    \"companyCode\": \"CMP0000012\",\n    \"name\": \"Acme Builders Pvt Ltd\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"gstNumber\": \"**********1Z5\",\n    \"panNumber\": \"*****0987F\",\n    \"gstVerifiedAt\": null,\n    \"gstVerificationRef\": null,\n    \"status\": \"PENDING_VERIFICATION\",\n    \"statusReason\": null,\n    \"owner\": {\n      \"id\": \"5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d\",\n      \"name\": \"Rohan Mehta\",\n      \"email\": \"rohan.mehta@acmebuilders.example.com\"\n    },\n    \"addresses\": [\n      {\n        \"id\": \"9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b\",\n        \"addressType\": \"REGISTERED_OFFICE\",\n        \"primary\": true,\n        \"line1\": \"Tower B, 4th Floor\",\n        \"line2\": \"Cyber Hub\",\n        \"stateId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n        \"cityId\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\",\n        \"pincode\": \"122002\"\n      }\n    ],\n    \"createdAt\": \"2026-11-21T06:30:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "409 - Owner email already in use",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Acme Builders Pvt Ltd\",\n  \"industryId\": \"{{industryId}}\",\n  \"ownerName\": \"Rohan Mehta\",\n  \"ownerEmail\": \"rohan.mehta@acmebuilders.example.com\"\n}"
+                }
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"CONFLICT\",\n    \"message\": \"A company user with this email already exists.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"d4e5f60718293a4b\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Company",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}"]
+            },
+            "description": "**Permission:** `company.edit`.\n\nReplaces `name`/`industryId` only - GST/PAN, status, and addresses each have their own dedicated endpoint.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |\n| Unknown `industryId` | `VALIDATION_ERROR` | 400 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Acme Builders Private Limited\",\n  \"industryId\": \"{{industryId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Acme Builders Private Limited\",\n  \"industryId\": \"{{industryId}}\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\",\n    \"companyCode\": \"CMP0000012\",\n    \"name\": \"Acme Builders Private Limited\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"gstNumber\": \"**********1Z5\",\n    \"panNumber\": \"*****0987F\",\n    \"gstVerifiedAt\": null,\n    \"gstVerificationRef\": null,\n    \"status\": \"PENDING_VERIFICATION\",\n    \"statusReason\": null,\n    \"owner\": {\n      \"id\": \"5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d\",\n      \"name\": \"Rohan Mehta\",\n      \"email\": \"rohan.mehta@acmebuilders.example.com\"\n    },\n    \"addresses\": [],\n    \"createdAt\": \"2026-11-21T06:30:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "404 - Unknown company id",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/00000000-0000-4000-8000-000000000000",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "00000000-0000-4000-8000-000000000000"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Acme Builders Private Limited\",\n  \"industryId\": \"{{industryId}}\"\n}"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"RESOURCE_NOT_FOUND\",\n    \"message\": \"Company not found\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"a1b2c3d4e5f60718\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Export Companies to Excel",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/export",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "export"]
+            },
+            "description": "**Permission:** `company.export`.\n\n**Returns a raw `.xlsx` file download (`Content-Disposition: attachment; filename=\"companies.xlsx\"`), NOT the usual JSON envelope** - this is the only endpoint on this controller that doesn't return `ApiResponse`. Columns, in order: Company Code, Name, Industry, Status, GST Number, PAN Number, GST Verified (`Yes`/`No`), Created At. GST/PAN are masked unless the caller also holds `company.view_sensitive` - the exact same masking Get Company applies.\n\nGive `ids` for an exact set (unknown ids are silently skipped); otherwise every other field is an optional filter with the **exact same semantics as List Companies above** (a non-empty set matches ANY of its values; every non-empty field is ANDed together). Posting `{}` exports every company, unfiltered.\n\n**Note on the Tests script below:** it checks the response headers (content-type, filename) instead of the usual envelope checks, since this endpoint genuinely isn't JSON and Postman's sandbox can't parse .xlsx bytes directly.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `company.export` | `ACCESS_DENIED` | 403 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\"{{companyId}}\"]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Content-Type is the xlsx MIME type', function () {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('spreadsheetml.sheet');",
+                  "});",
+                  "pm.test('Content-Disposition names a .xlsx file', function () {",
+                  "  pm.expect(pm.response.headers.get('Content-Disposition')).to.include('companies.xlsx');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - xlsx file (exact ids)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/export",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "export"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": [\"{{companyId}}\"]\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "text",
+              "header": [
+                {"key": "Content-Type", "value": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                {"key": "Content-Disposition", "value": "attachment; filename=\"companies.xlsx\""}
+              ],
+              "body": "(binary .xlsx content - not representable as a JSON example; see the Columns list in this request's description)"
+            },
+            {
+              "name": "403 - Caller lacks company.export",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/export",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "export"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}"
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"3a4b5c6d7e0f1829\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Company Status",
+      "description": "The company approval-status lifecycle: `PENDING_VERIFICATION ⇄ REJECTED`, `PENDING_VERIFICATION → ACTIVE`, `ACTIVE ⇄ SUSPENDED` - every other pair (including `REJECTED → ACTIVE` directly, and `ACTIVE → REJECTED`) is rejected. Every change takes an explicit target status via `company.manage_status` (single or bulk), never a blind toggle; a `reason` is required for `SUSPENDED`/`REJECTED`. Moving to `SUSPENDED`/`REJECTED` disables every one of the company's login accounts and revokes every one of their refresh tokens in the same transaction; moving back to `ACTIVE` re-enables them. Status History is the append-only, never-edited audit trail of every transition a company has ever had.",
+      "item": [
+        {
+          "name": "Change Company Status",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}", "status"]
+            },
+            "description": "**Permission:** `company.manage_status`.\n\nAn explicit target status, never a blind toggle. `reason` is required when the target is `SUSPENDED` or `REJECTED`; ignored otherwise.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |\n| Target equals the current status, or `reason` missing for `SUSPENDED`/`REJECTED` | `VALIDATION_ERROR` | 400 |\n| Illegal transition (e.g. `REJECTED` -> `ACTIVE` directly, `ACTIVE` -> `REJECTED`) | `BUSINESS_RULE_VIOLATION` | 422 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ACTIVE\",\n  \"reason\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK (approved to ACTIVE)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/status",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "status"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"ACTIVE\",\n  \"reason\": null\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\",\n    \"companyCode\": \"CMP0000012\",\n    \"name\": \"Acme Builders Pvt Ltd\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"gstNumber\": \"**********1Z5\",\n    \"panNumber\": \"*****0987F\",\n    \"gstVerifiedAt\": null,\n    \"gstVerificationRef\": null,\n    \"status\": \"ACTIVE\",\n    \"statusReason\": null,\n    \"owner\": {\n      \"id\": \"5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d\",\n      \"name\": \"Rohan Mehta\",\n      \"email\": \"rohan.mehta@acmebuilders.example.com\"\n    },\n    \"addresses\": [],\n    \"createdAt\": \"2026-11-21T06:30:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - Reason missing for SUSPENDED",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/status",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "status"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"SUSPENDED\"\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"A reason is required when setting status to SUSPENDED.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"b2c3d4e5f6071829\"\n  }\n}"
+            },
+            {
+              "name": "422 - Illegal transition (REJECTED -> ACTIVE directly)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/status",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "status"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"ACTIVE\"\n}"
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Cannot move a company from REJECTED to ACTIVE.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"c3d4e5f607182930\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Bulk Change Company Status",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/bulk-status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "bulk-status"]
+            },
+            "description": "**Permission:** `company.manage_status`.\n\nApplies the exact same guarded transition as Change Company Status (above) to every id in `ids` independently - calls the single-company logic per id, so every rule (allowed-transition check, reason-required check, the login-account disable/revoke cascade) is identical, just batched. Partial success is the normal, expected outcome, not an all-or-nothing failure - one id failing its guard (not found, illegal transition, missing reason, ...) is recorded in `data.failures[]` and does not roll back the ids that already succeeded.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| `ids` was empty | `VALIDATION_ERROR` | 400 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\"{{companyId}}\"],\n  \"status\": \"SUSPENDED\",\n  \"reason\": \"Non-payment of platform fees\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Partial success (one illegal transition)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/bulk-status",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "bulk-status"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": [\"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\", \"99999999-9999-4999-8999-999999999999\"],\n  \"status\": \"SUSPENDED\",\n  \"reason\": \"Non-payment of platform fees\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"successCount\": 1,\n    \"failures\": [\n      { \"id\": \"99999999-9999-4999-8999-999999999999\", \"reason\": \"Not found\" }\n    ]\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - ids was empty",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/bulk-status",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "bulk-status"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": [],\n  \"status\": \"SUSPENDED\",\n  \"reason\": \"Non-payment of platform fees\"\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"ids: must not be empty\",\n    \"fieldErrors\": [ { \"field\": \"ids\", \"message\": \"must not be empty\" } ],\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"071829303a4b5c6d\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Company Status History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/status-history",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}", "status-history"]
+            },
+            "description": "**Permission:** `company.view`.\n\nEvery approval-status transition this company has ever had, newest first - an immutable audit trail, paginated the same way as List Companies.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/status-history",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "status-history"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e\",\n        \"fromStatus\": \"PENDING_VERIFICATION\",\n        \"toStatus\": \"ACTIVE\",\n        \"reason\": null,\n        \"changedByAdminEmail\": \"admin@anytimework.in\",\n        \"changedAt\": \"2026-11-21T07:00:00Z\"\n      },\n      {\n        \"id\": \"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d\",\n        \"fromStatus\": null,\n        \"toStatus\": \"PENDING_VERIFICATION\",\n        \"reason\": null,\n        \"changedByAdminEmail\": \"admin@anytimework.in\",\n        \"changedAt\": \"2026-11-21T06:30:00Z\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 2,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Company GST Verification",
+      "description": "Triggers a GST-number verification against the configured vendor (Sandbox.co.in's GST Compliance API in production; a deterministic stub everywhere else by default - see `HANDOVER.md`). Deliberately decoupled from company creation: creating a company never depends on this call succeeding, so a vendor outage can never block onboarding. Reuses `company.edit` rather than its own permission code, mirroring how worker bank-account verification reuses an existing code.",
+      "item": [
+        {
+          "name": "Verify Company GST",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/gst-verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}", "gst-verify"]
+            },
+            "description": "**Permission:** `company.edit`.\n\nNo request body - verifies whatever `gstNumber` is currently on file for this company against the configured GST-verification provider. On success, stamps `gstVerifiedAt`/`gstVerificationRef`. A provider-reported negative result (invalid pattern, not found, not active) surfaces as a 422 with the provider's own reason and persists nothing, so this can simply be retried once the GST number on file is corrected.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |\n| No GST number on file for this company | `VALIDATION_ERROR` | 400 |\n| Provider reports invalid/not-found/inactive GSTIN | `BUSINESS_RULE_VIOLATION` | 422 |\n| Provider unreachable or times out | `BUSINESS_RULE_VIOLATION` | 422 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Verified (stub provider)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/gst-verify",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "gst-verify"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\",\n    \"companyCode\": \"CMP0000012\",\n    \"name\": \"Acme Builders Pvt Ltd\",\n    \"industryId\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n    \"gstNumber\": \"**********1Z5\",\n    \"panNumber\": \"*****0987F\",\n    \"gstVerifiedAt\": \"2026-11-21T07:05:00Z\",\n    \"gstVerificationRef\": \"STUB-GST-VERIFICATION-REF\",\n    \"status\": \"ACTIVE\",\n    \"statusReason\": null,\n    \"owner\": {\n      \"id\": \"5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d\",\n      \"name\": \"Rohan Mehta\",\n      \"email\": \"rohan.mehta@acmebuilders.example.com\"\n    },\n    \"addresses\": [],\n    \"createdAt\": \"2026-11-21T06:30:00Z\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - No GST number on file",
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/gst-verify",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "gst-verify"]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"This company has no GST number on file to verify.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"e5f60718293a4b5c\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Company Addresses",
+      "description": "A company's addresses as a standalone sub-resource - one registered office plus any number of branches, a genuinely variable-length list (unlike a worker's fixed 2 address rows), so full CRUD (list/add/update/delete one at a time) rather than a single fixed-shape endpoint. Permission is `company.view` for List, `company.edit` for Add/Update/Delete. Exactly one address is primary at all times once a company has any: Add/Update demote whichever address currently holds primary when you set `primary=true` on a different one; Update additionally refuses to unset the CURRENT primary address unless a different one is being promoted in the same call; Delete either blocks removing a company's only remaining address outright, or auto-promotes the next-oldest survivor when the deleted address was primary.",
+      "item": [
+        {
+          "name": "List Company Addresses",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses"]
+            },
+            "description": "**Permission:** `company.view`.\n\nEvery (non-deleted) address this company has, in no particular guaranteed order.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": [\n    {\n      \"id\": \"9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b\",\n      \"addressType\": \"REGISTERED_OFFICE\",\n      \"primary\": true,\n      \"line1\": \"Tower B, 4th Floor\",\n      \"line2\": \"Cyber Hub\",\n      \"stateId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n      \"cityId\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\",\n      \"pincode\": \"122002\"\n    }\n  ],\n  \"error\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "Add Company Address",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses"]
+            },
+            "description": "**Permission:** `company.edit`.\n\nSetting `primary=true` demotes whichever address currently holds it - at most one address per company may be primary. A company may transiently have zero primary addresses right after creation if none was added yet; once at least one exists, Update/Delete both enforce exactly one primary at all times.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |\n| Unknown `stateId`/`cityId` | `VALIDATION_ERROR` | 400 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"addressType\": \"BRANCH\",\n  \"primary\": false,\n  \"line1\": \"Plot 14, Industrial Area\",\n  \"line2\": \"Phase 2\",\n  \"stateId\": \"{{stateId}}\",\n  \"cityId\": \"{{cityId}}\",\n  \"pincode\": \"122016\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});",
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  pm.environment.set('addressId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"addressType\": \"BRANCH\",\n  \"primary\": false,\n  \"line1\": \"Plot 14, Industrial Area\",\n  \"line2\": \"Phase 2\",\n  \"stateId\": \"{{stateId}}\",\n  \"cityId\": \"{{cityId}}\",\n  \"pincode\": \"122016\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"4d5e6f7a-8b9c-4d0e-8f1a-2b3c4d5e6f7a\",\n    \"addressType\": \"BRANCH\",\n    \"primary\": false,\n    \"line1\": \"Plot 14, Industrial Area\",\n    \"line2\": \"Phase 2\",\n    \"stateId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"cityId\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\",\n    \"pincode\": \"122016\"\n  },\n  \"error\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Company Address",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses/{{addressId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses", "{{addressId}}"]
+            },
+            "description": "**Permission:** `company.edit`.\n\nFull replace of the address at `addressId`, except its `addressType` (fixed once created). Rejected with a 422 if this address is currently the company's primary one and `primary=false` is sent with no different address being promoted in the same request - to actually change which address is primary, set `primary=true` on the new one instead; to remove the primary address entirely, delete it (which auto-promotes a replacement).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id, or address doesn't belong to this company | `RESOURCE_NOT_FOUND` | 404 |\n| Unknown `stateId`/`cityId` | `VALIDATION_ERROR` | 400 |\n| Attempting to unset the current primary address with no replacement promoted | `BUSINESS_RULE_VIOLATION` | 422 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"primary\": false,\n  \"line1\": \"Plot 14-A, Industrial Area\",\n  \"line2\": \"Phase 2\",\n  \"stateId\": \"{{stateId}}\",\n  \"cityId\": \"{{cityId}}\",\n  \"pincode\": \"122016\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses/{{addressId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses", "{{addressId}}"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"primary\": false,\n  \"line1\": \"Plot 14-A, Industrial Area\",\n  \"line2\": \"Phase 2\",\n  \"stateId\": \"{{stateId}}\",\n  \"cityId\": \"{{cityId}}\",\n  \"pincode\": \"122016\"\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"4d5e6f7a-8b9c-4d0e-8f1a-2b3c4d5e6f7a\",\n    \"addressType\": \"BRANCH\",\n    \"primary\": false,\n    \"line1\": \"Plot 14-A, Industrial Area\",\n    \"line2\": \"Phase 2\",\n    \"stateId\": \"1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d\",\n    \"cityId\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\",\n    \"pincode\": \"122016\"\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Cannot unset the current primary address",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses/9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses", "9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"primary\": false,\n  \"line1\": \"Tower B, 4th Floor\"\n}"
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Cannot unset this company's primary address directly; make a different address primary first, or delete this one.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"f60718293a4b5c6d\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Company Address",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses/{{addressId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses", "{{addressId}}"]
+            },
+            "description": "**Permission:** `company.edit`. Soft-deletes the address (never a real SQL DELETE).\n\n**Rules:** rejected with a 422 if this is the company's only remaining address - a company must always have at least one. If the deleted address was the primary one and another remains, the next-oldest surviving address is automatically promoted to primary in the same request.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id, or address doesn't belong to this company | `RESOURCE_NOT_FOUND` | 404 |\n| This is the company's only remaining address | `BUSINESS_RULE_VIOLATION` | 422 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses/{{addressId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses", "{{addressId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": null,\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Only remaining address",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}/addresses/9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}", "addresses", "9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b"]
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"A company must always have at least one address; cannot delete its only remaining address.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"0718293a4b5c6d7e\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Company Deletion",
+      "description": "Deleting a company is a **soft** delete (`deletedAt`) - never a real SQL `DELETE` - and is refused while the company is `ACTIVE`. Every satellite row (addresses, status history, the company's own users and their tokens) is left untouched, preserving full history, and the user-disable-and-revoke-sessions cascade applies exactly as it does for a SUSPENDED/REJECTED status change. **Run this folder last** - several requests in the folders above need `{{companyId}}` to still exist.",
+      "item": [
+        {
+          "name": "Delete Company",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "{{companyId}}"]
+            },
+            "description": "**Permission:** `company.delete`.\n\nSoft-deletes the company and applies the same user-disable-and-revoke-sessions cascade as moving to SUSPENDED/REJECTED.\n\n**Precondition:** rejected with a 422 if the company is currently `ACTIVE` - change its status first (e.g. to `SUSPENDED`) via Change Company Status, then delete.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown company id | `RESOURCE_NOT_FOUND` | 404 |\n| Company is currently `ACTIVE` | `BUSINESS_RULE_VIOLATION` | 422 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": null,\n  \"error\": null\n}"
+            },
+            {
+              "name": "422 - Company is currently ACTIVE",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/{{companyId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "{{companyId}}"]
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"BUSINESS_RULE_VIOLATION\",\n    \"message\": \"Cannot delete a company while ACTIVE. Change its status first (e.g. to SUSPENDED), then delete.\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"18293a4b5c6d7e0f\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Bulk Delete Companies",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/companies/bulk-delete",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "companies", "bulk-delete"]
+            },
+            "description": "**Permission:** `company.delete`.\n\nApplies the exact same guarded soft-delete as Delete Company (above) to every id in `ids` independently - calls the single-company logic per id. Partial success is expected - an id that's currently `ACTIVE`, or doesn't exist, is recorded in `data.failures[]` without rolling back the ids that already succeeded.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| `ids` was empty | `VALIDATION_ERROR` | 400 |",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\"{{companyId}}\"]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 2xx', function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test('Envelope has success:true', function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - Partial success (one still ACTIVE)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/bulk-delete",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "bulk-delete"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": [\"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\", \"88888888-8888-4888-8888-888888888888\"]\n}"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"successCount\": 1,\n    \"failures\": [\n      { \"id\": \"88888888-8888-4888-8888-888888888888\", \"reason\": \"Cannot delete a company while ACTIVE. Change its status first (e.g. to SUSPENDED), then delete.\" }\n    ]\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "400 - ids was empty",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/companies/bulk-delete",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "v1", "admin", "companies", "bulk-delete"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": []\n}"
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"ids: must not be empty\",\n    \"fieldErrors\": [ { \"field\": \"ids\", \"message\": \"must not be empty\" } ],\n    \"timestamp\": \"2026-11-21T10:00:00Z\",\n    \"traceId\": \"293a4b5c6d7e0f18\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

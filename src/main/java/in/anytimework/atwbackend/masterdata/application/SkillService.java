@@ -224,7 +224,7 @@ public class SkillService {
 
     private void requireDesignationExists(UUID designationId) {
         if (!designations.existsById(designationId)) {
-            throw new ValidationException("Unknown designation id: " + designationId);
+            throw new ValidationException("Unknown designation.");
         }
     }
 

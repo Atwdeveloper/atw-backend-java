@@ -11,7 +11,9 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,10 +47,12 @@ class FaceAuthServiceEnrollDuplicateTest {
     private final DocumentService documentService = mock(DocumentService.class);
     private final FaceIdentifyProperties identifyProperties = new FaceIdentifyProperties(0.5, 0.05);
     private final FaceDuplicateProperties duplicateProperties = new FaceDuplicateProperties(0.5);
+    private final WorkerDisplayLookup workerDisplayLookup = mock(WorkerDisplayLookup.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-17T06:00:00Z"), ZoneOffset.UTC);
 
     private final FaceAuthServiceImpl service = new FaceAuthServiceImpl(
-            enrollments, faceAuthPort, photoSupport, documentService, identifyProperties, duplicateProperties, clock);
+            enrollments, faceAuthPort, photoSupport, documentService, identifyProperties, duplicateProperties,
+            workerDisplayLookup, clock);
 
     private static final byte[] PHOTO_BYTES = {1, 2, 3};
     private static final FaceQualitySnapshot ACCEPTABLE_QUALITY = new FaceQualitySnapshot(400, 0.9, 0.5, true, List.of());
@@ -81,12 +85,33 @@ class FaceAuthServiceEnrollDuplicateTest {
         stubNewPhotoEmbedding(vectorWithCosine(1.0));
         when(enrollments.findByExcludedFromMatchingAtIsNull())
                 .thenReturn(List.of(enrollmentWithEmbedding(conflictingWorkerId, vectorWithCosine(0.95))));
+        when(workerDisplayLookup.findByIds(Set.of(conflictingWorkerId)))
+                .thenReturn(Map.of(conflictingWorkerId, new WorkerDisplayInfo("Test Worker", "WRK0000001")));
+
+        // The conflicting worker must be named for the admin, never shown as a raw id (the exact bug
+        // this message format was built to avoid).
+        assertThatThrownBy(() -> service.enroll(newWorkerId, "face.jpg", "image/jpeg", PHOTO_BYTES, true, "127.0.0.1"))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining("Test Worker")
+                .hasMessageContaining("WRK0000001")
+                .hasMessageContaining("already enrolled")
+                .hasMessageNotContaining(conflictingWorkerId.toString());
+        verify(enrollments, never()).save(any());
+    }
+
+    @Test
+    void enroll_whenConflictingWorkerCannotBeResolvedToAName_fallsBackToAGenericReferenceRatherThanARawId() {
+        UUID newWorkerId = UUID.randomUUID();
+        UUID conflictingWorkerId = UUID.randomUUID();
+        stubNewPhotoEmbedding(vectorWithCosine(1.0));
+        when(enrollments.findByExcludedFromMatchingAtIsNull())
+                .thenReturn(List.of(enrollmentWithEmbedding(conflictingWorkerId, vectorWithCosine(0.95))));
+        when(workerDisplayLookup.findByIds(Set.of(conflictingWorkerId))).thenReturn(Map.of());
 
         assertThatThrownBy(() -> service.enroll(newWorkerId, "face.jpg", "image/jpeg", PHOTO_BYTES, true, "127.0.0.1"))
                 .isInstanceOf(ConflictException.class)
-                .hasMessageContaining(conflictingWorkerId.toString())
-                .hasMessageContaining("already enrolled");
-        verify(enrollments, never()).save(any());
+                .hasMessageContaining("already enrolled")
+                .hasMessageNotContaining(conflictingWorkerId.toString());
     }
 
     @Test
