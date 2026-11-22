@@ -9,13 +9,13 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Body for the CSV export endpoint. When {@code ids} is given and non-empty, exports exactly those
- * workers; otherwise exports every worker matching the remaining fields, which mirror the admin list
- * endpoint's own filters exactly (see {@code WorkerSearchCriteria}) - moved to a POST body instead of
- * query params since a filtered full-table export isn't a single resource "get". Posting {@code {}}
- * (every field absent) exports every worker, unfiltered.
+ * Body for the Excel (.xlsx) export endpoint. When {@code ids} is given and non-empty, exports
+ * exactly those workers; otherwise exports every worker matching the remaining fields, which mirror
+ * the admin list endpoint's own filters exactly (see {@code WorkerSearchCriteria}) - moved to a POST
+ * body instead of query params since a filtered full-table export isn't a single resource "get".
+ * Posting {@code {}} (every field absent) exports every worker, unfiltered.
  */
-@Schema(description = "Selects which workers the CSV export includes. Give ids for an exact set "
+@Schema(description = "Selects which workers the Excel export includes. Give ids for an exact set "
         + "(unknown ids are silently skipped); otherwise every other field is an optional filter with "
         + "the exact same semantics as GET / (a non-empty set matches ANY of its values; every "
         + "non-empty field is ANDed together). An empty body ({}) exports every worker.")

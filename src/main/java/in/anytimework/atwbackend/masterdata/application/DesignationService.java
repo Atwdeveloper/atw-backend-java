@@ -8,6 +8,7 @@ import in.anytimework.atwbackend.masterdata.domain.Designation;
 import in.anytimework.atwbackend.masterdata.domain.DesignationRepository;
 import in.anytimework.atwbackend.masterdata.domain.Industry;
 import in.anytimework.atwbackend.masterdata.domain.IndustryRepository;
+import in.anytimework.atwbackend.masterdata.domain.SkillCategory;
 import in.anytimework.atwbackend.masterdata.domain.SkillCategoryRepository;
 import in.anytimework.atwbackend.shared.api.BulkActionFailure;
 import in.anytimework.atwbackend.shared.api.BulkActionResult;
@@ -32,8 +33,11 @@ import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * CRUD for designations, including the designation-to-industry assignment. Authorization
@@ -84,7 +88,22 @@ public class DesignationService {
         Page<Designation> page = designations.findAll(Specifications.allOf(predicates), pageable);
         // toDto, not a separate list-only projection: image URL resolution is cheap now (the Azure
         // delegation key is cached), so every row gets a resolved imageUrl here too - see get().
-        return PageResponse.from(page.map(this::toDto));
+        Map<UUID, String> skillCategoryNameById = skillCategoryNameById(page.getContent());
+        // Map.of() (the common case: no row on this page has a skill category) throws NPE on get(null)
+        // unlike HashMap - d.getSkillCategoryId() is null for most designations, so this null-check
+        // can't be folded into the map lookup itself.
+        return PageResponse.from(page.map(d -> toDto(d,
+                d.getSkillCategoryId() == null ? null : skillCategoryNameById.get(d.getSkillCategoryId()))));
+    }
+
+    /** Batched counterpart of {@link #skillCategoryNameOf} - one {@code WHERE id IN (...)} for the whole page, not one query per row. */
+    private Map<UUID, String> skillCategoryNameById(List<Designation> rows) {
+        Set<UUID> ids = rows.stream().map(Designation::getSkillCategoryId).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return skillCategories.findAllById(ids).stream()
+                .collect(Collectors.toMap(SkillCategory::getId, SkillCategory::getName));
     }
 
     @Transactional(readOnly = true)
@@ -246,7 +265,7 @@ public class DesignationService {
     /** skillCategoryId is optional (nullable) - only validated, never required, if supplied. */
     private void requireSkillCategoryExistsIfPresent(UUID skillCategoryId) {
         if (skillCategoryId != null && !skillCategories.existsById(skillCategoryId)) {
-            throw new ValidationException("Unknown skill category id: " + skillCategoryId);
+            throw new ValidationException("Unknown skill category.");
         }
     }
 
@@ -256,10 +275,7 @@ public class DesignationService {
         }
         List<Industry> found = industries.findAllById(industryIds);
         if (found.size() != industryIds.size()) {
-            Set<UUID> foundIds = new HashSet<>();
-            found.forEach(i -> foundIds.add(i.getId()));
-            List<UUID> unknown = industryIds.stream().filter(idValue -> !foundIds.contains(idValue)).toList();
-            throw new ValidationException("Unknown industry id(s): " + unknown);
+            throw new ValidationException("One or more selected industries could not be found.");
         }
         return new HashSet<>(found);
     }
@@ -268,10 +284,21 @@ public class DesignationService {
         return designations.findById(id).orElseThrow(() -> new ResourceNotFoundException("Designation not found"));
     }
 
+    /** Single-row resolution (get/create/update/...) - only {@link #list} needs the batched {@link #skillCategoryNameById}. */
+    private String skillCategoryNameOf(Designation designation) {
+        UUID skillCategoryId = designation.getSkillCategoryId();
+        return skillCategoryId == null ? null
+                : skillCategories.findById(skillCategoryId).map(SkillCategory::getName).orElse(null);
+    }
+
     private DesignationResponse toDto(Designation designation) {
+        return toDto(designation, skillCategoryNameOf(designation));
+    }
+
+    private DesignationResponse toDto(Designation designation, String skillCategoryName) {
         return new DesignationResponse(designation.getId(), designation.getName(), designation.getStatus(),
                 images.urlOrNull(designation.getImageDocumentId()), industrySummariesOf(designation),
-                designation.getSkillCategoryId());
+                designation.getSkillCategoryId(), skillCategoryName);
     }
 
     private List<IndustrySummary> industrySummariesOf(Designation designation) {

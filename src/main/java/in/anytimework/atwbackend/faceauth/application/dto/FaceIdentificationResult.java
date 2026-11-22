@@ -15,6 +15,8 @@ import java.util.UUID;
 public record FaceIdentificationResult(
         @Schema(description = "Whether a confident, unambiguous match was found.") boolean matched,
         @Schema(description = "The matched worker's id, or null if matched=false.", nullable = true) UUID workerId,
+        @Schema(description = "The matched worker's display name, resolved server-side, or null if "
+                + "matched=false.", example = "Ramesh Kumar", nullable = true) String workerName,
         @Schema(description = "The best (highest) similarity score found, regardless of whether it cleared "
                 + "the threshold.", example = "0.87") double bestScore,
         @Schema(description = "True when the top two candidates scored too close together to confidently "

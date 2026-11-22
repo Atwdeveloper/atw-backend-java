@@ -214,5 +214,9 @@ class FaceAuthServiceIntegrationTest {
 
         assertThat(result.topMatches()).isNotEmpty();
         assertThat(result.bestScore()).isBetween(-1.0, 1.0);
+        // Proves the real cross-module wiring (WorkerDisplayLookup -> WorkerDisplayLookupAdapter ->
+        // the real worker table) actually resolves a name, end to end - every candidate here traces
+        // back to a worker createWorker() just persisted, so none should come back with a blank name.
+        assertThat(result.topMatches()).allSatisfy(candidate -> assertThat(candidate.workerName()).isNotBlank());
     }
 }

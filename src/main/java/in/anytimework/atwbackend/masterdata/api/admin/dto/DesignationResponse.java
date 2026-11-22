@@ -20,6 +20,9 @@ public record DesignationResponse(
         @Schema(description = "Assigned skill category id, or null if none is assigned. Set/cleared only via "
                 + "the dedicated assign/clear skill-category endpoints - never via the general Update.",
                 nullable = true, example = "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a")
-        UUID skillCategoryId
+        UUID skillCategoryId,
+        @Schema(description = "Resolved skill category name, for convenience - null exactly when skillCategoryId is null.",
+                nullable = true, example = "Skilled")
+        String skillCategoryName
 ) {
 }

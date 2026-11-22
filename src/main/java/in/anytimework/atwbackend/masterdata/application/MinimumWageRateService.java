@@ -110,10 +110,10 @@ public class MinimumWageRateService {
     @Transactional
     public MinimumWageRateResponse create(CreateMinimumWageRateRequest request) {
         if (!states.existsById(request.stateId())) {
-            throw new ValidationException("Unknown state id: " + request.stateId());
+            throw new ValidationException("Unknown state.");
         }
         if (!skillCategories.existsById(request.skillCategoryId())) {
-            throw new ValidationException("Unknown skill category id: " + request.skillCategoryId());
+            throw new ValidationException("Unknown skill category.");
         }
         if (rates.existsByStateIdAndSkillCategoryIdAndEffectiveFromAndStatus(
                 request.stateId(), request.skillCategoryId(), request.effectiveFrom(), ActiveStatus.ACTIVE)) {

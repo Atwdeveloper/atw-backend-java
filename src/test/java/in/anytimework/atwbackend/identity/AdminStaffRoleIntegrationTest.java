@@ -373,17 +373,23 @@ class AdminStaffRoleIntegrationTest {
     void staffAddress_updateThenGet_roundTrips() {
         AdminStaffResponse staff = createStaffAsSuperAdmin("Address Target", List.of());
         City jaipur = createTestCity();
+        State rajasthan = states.findById(jaipur.getStateId()).orElseThrow();
 
         AdminUserAddressResponse updated = staffAddressService.update(staff.id(),
                 new UpdateAddressRequest("221B Baker Street", "Near City Park", jaipur.getStateId(), jaipur.getId(), "302001"),
                 "127.0.0.1", "JUnit");
         assertThat(updated.line1()).isEqualTo("221B Baker Street");
         assertThat(updated.cityId()).isEqualTo(jaipur.getId());
+        // Resolved server-side, never a raw id the caller would otherwise have to look up itself.
+        assertThat(updated.cityName()).isEqualTo(jaipur.getName());
+        assertThat(updated.stateName()).isEqualTo(rajasthan.getName());
 
         AdminUserAddressResponse fetched = staffAddressService.get(staff.id());
         assertThat(fetched.line1()).isEqualTo("221B Baker Street");
         assertThat(fetched.line2()).isEqualTo("Near City Park");
         assertThat(fetched.stateId()).isEqualTo(jaipur.getStateId());
+        assertThat(fetched.stateName()).isEqualTo(rajasthan.getName());
+        assertThat(fetched.cityName()).isEqualTo(jaipur.getName());
         assertThat(fetched.pincode()).isEqualTo("302001");
     }
 

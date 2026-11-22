@@ -70,6 +70,13 @@ Packaging produces a single executable jar: `target/atw-backend-0.0.1-SNAPSHOT.j
    random, photo-independent data — it will never actually recognize anyone or catch a real duplicate
    face, with no error anywhere to notice. Confirm `FACE_AUTH_PROVIDER=python` is actually set, not
    just assumed.
+11. **Sandbox.co.in integrations (Aadhaar e-KYC, bank verification, GST verification)** — three
+    separate SaaS products, **nothing to provision in Azure for any of them**, just configuration
+    (§3). All three share face recognition's exact silent-failure shape above: each defaults to a
+    stub adapter that always "succeeds" with fake, deterministic data when its provider flag is left
+    unset, with no error anywhere to notice. **None of the three provider flags or their credential
+    env vars have ever been in this document before today** — confirm all three are actually set to
+    `sandbox` in the running Azure app, not just assumed.
 
 ---
 
@@ -148,6 +155,56 @@ actual smoke test (§7).
 | `FACE_AUTH_TIMEOUT` | `PT75S` | — | Render's free tier cold-starts after idling; the default already accounts for it. |
 | `FACE_AUTH_IDENTIFY_THRESHOLD` / `FACE_AUTH_IDENTIFY_MARGIN` | `0.5` / `0.05` | — | 1:N identify match confidence (legacy's own production-validated values, not yet recalibrated for this specific deployment). |
 | `FACE_AUTH_DUPLICATE_THRESHOLD` | `0.5` | — | Enrollment-time duplicate-face rejection threshold. |
+
+### Sandbox.co.in integrations — Aadhaar e-KYC, bank verification, GST verification: required for real verification, but fail SILENTLY if skipped (see §2.11)
+
+Three separate products on the Sandbox.co.in vendor platform, each behind its own port/adapter pair
+(a stub default and a real `Sandbox*Adapter`) switched by its own Spring property — mirrors face
+recognition's pattern above, including its risk. **Leaving a provider flag unset silently activates
+the stub**: it always "succeeds" with fake, deterministic data and makes no real vendor call — the
+app boots fine, every call returns a plausible-looking response, and there is no error anywhere to
+notice. (The opposite mistake — a typo'd value that is neither `sandbox` nor `stub` — fails the
+opposite way: no adapter bean matches either condition and the app refuses to boot, so at least that
+particular mistake is loud.) **None of the three provider flags or their credential env vars have
+ever appeared in this document until today** — confirm each one below is actually `sandbox` in the
+running Azure app, not just assumed, the same way the face-recognition table above already asks for
+`FACE_AUTH_PROVIDER`.
+
+**Aadhaar e-KYC** (`in.anytimework.atwbackend.kyc.infrastructure.SandboxAadhaarKycAdapter`, property `atw.aadhaar-kyc.provider`):
+
+| Variable | Default | Example (Azure) | Meaning |
+|---|---|---|---|
+| `ATW_AADHAAR_KYC_PROVIDER` | `stub` | `sandbox` | No short alias like `FACE_AUTH_PROVIDER` exists for this one — it binds straight off the full `atw.aadhaar-kyc.provider` property path. `stub` (default) returns fake, fixed "verified" Aadhaar details for any OTP — never real UIDAI data. Set to `sandbox` for the real integration. |
+| `SANDBOX_KYC_BASE_URL` | `https://api.sandbox.co.in` | — | Only read once the provider above is `sandbox`. Already correct by default; only override if Sandbox.co.in ever assigns a different host. |
+| `SANDBOX_API_KEY` / `SANDBOX_API_SECRET` | *(empty)* | *(secret)* | Sandbox.co.in account credentials, exchanged for a bearer token via `/authenticate` on every call (no token caching, by design — see the adapter's Javadoc). **Shared with GST verification below** — the same two values, not two separate secrets. |
+| `SANDBOX_KYC_TIMEOUT` | `PT20S` | — | HTTP client timeout for both the `/authenticate` and OTP send/verify calls. |
+
+**Bank account verification** (`in.anytimework.atwbackend.worker.infrastructure.SandboxBankVerificationAdapter`, property `atw.bank-verification.provider`) — **its own, fully separate Sandbox.co.in account, never shared with the other two below**:
+
+| Variable | Default | Example (Azure) | Meaning |
+|---|---|---|---|
+| `ATW_BANK_VERIFICATION_PROVIDER` | `stub` | `sandbox` | `stub` (default) returns a fake "account exists" penny-drop result for any account/IFSC — never a real bank check. Set to `sandbox` for the real integration. |
+| `SANDBOX_BANK_BASE_URL` | `https://api.sandbox.co.in` | — | Logically independent of the other two base URLs even though it happens to default to the same host. |
+| `SANDBOX_BANK_API_KEY` / `SANDBOX_BANK_API_SECRET` | *(empty)* | *(secret)* | **A separate Sandbox.co.in account/credential pair — do not reuse `SANDBOX_API_KEY`/`SANDBOX_API_SECRET` here.** This adapter's wire contract (endpoint path, field names) is a best-effort reading of Sandbox.co.in's public docs, not confirmed against a live instance and not ported from a working legacy reference (legacy used a different, dead vendor for this) — confirm against Sandbox's current docs before relying on it beyond a throwaway test call. |
+| `SANDBOX_BANK_TIMEOUT` | `PT20S` | — | |
+
+**GST verification** (`in.anytimework.atwbackend.company.infrastructure.SandboxGstVerificationAdapter`, property `atw.gst-verification.provider`) — **deliberately reuses the Aadhaar e-KYC credentials above, not a new secret**:
+
+| Variable | Default | Example (Azure) | Meaning |
+|---|---|---|---|
+| `ATW_GST_VERIFICATION_PROVIDER` | `stub` | `sandbox` | `stub` (default) returns a fake, fixed "active GSTIN" result for any GST number — never a real registry lookup. Set to `sandbox` for the real integration. |
+| `SANDBOX_GST_BASE_URL` | `https://api.sandbox.co.in` | — | |
+| `SANDBOX_API_KEY` / `SANDBOX_API_SECRET` | *(empty)* | *(secret)* | **The exact same two secrets as Aadhaar e-KYC's row above — not a separate credential.** GST verification is a second Sandbox.co.in product under the same already-wired account (confirmed against the legacy app's own PHP source), so nothing new needs adding to Key Vault here *if* those two secrets are already there — see the note below. |
+| `SANDBOX_GST_TIMEOUT` | `PT20S` | — | |
+
+> ⚠️ **This doc never told anyone to set any of the nine variables above, for any of the three
+> integrations, until today.** Unless a provider flag was set directly in the Container App's env
+> vars outside of anything this handover ever instructed, **production may currently be running the
+> fake stub for Aadhaar e-KYC and bank verification too — not just GST** — with every worker-intake
+> call "succeeding" and nobody having seen an error about it. Check `az containerapp show --name
+> <app> --resource-group <rg> --query "properties.template.containers[0].env"` (§4b) for
+> `ATW_AADHAAR_KYC_PROVIDER` / `ATW_BANK_VERIFICATION_PROVIDER` / `ATW_GST_VERIFICATION_PROVIDER`
+> before assuming any of the three is real today.
 
 ### Optional (sensible defaults shown)
 
@@ -240,6 +297,40 @@ az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label d
 az keyvault secret set --vault-name <key_vault_name> \
   --name backend-face-auth-api-key --value "<the real key>"
 ```
+
+Example: wiring the three Sandbox.co.in integrations from §3 end-to-end (same pattern — provider
+flag to App Configuration, secrets to Key Vault):
+
+```bash
+# Plain values -> App Configuration, labeled "dev" -- the three provider flags (none of these
+# existed in this doc before; all three currently default to the stub if left unset)
+az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
+  --key backend-atw-aadhaar-kyc-provider --value sandbox
+az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
+  --key backend-atw-bank-verification-provider --value sandbox
+az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
+  --key backend-atw-gst-verification-provider --value sandbox
+
+# Secrets -> Key Vault. Aadhaar e-KYC and GST verification deliberately share ONE Sandbox.co.in
+# credential pair -- set it once and both integrations read the same two secrets (GST needs no
+# command of its own here). VERIFY these two don't already exist first (they should have been added
+# when Aadhaar e-KYC first shipped, but this doc never said to -- check with
+# `az keyvault secret list --vault-name <key_vault_name> --query "[].name"` before assuming):
+az keyvault secret set --vault-name <key_vault_name> \
+  --name backend-sandbox-api-key --value "<the real Sandbox.co.in API key>"
+az keyvault secret set --vault-name <key_vault_name> \
+  --name backend-sandbox-api-secret --value "<the real Sandbox.co.in API secret>"
+
+# Bank verification's Sandbox.co.in account is separately credentialed -- a different pair, never
+# reused from the two commands above.
+az keyvault secret set --vault-name <key_vault_name> \
+  --name backend-sandbox-bank-api-key --value "<the real bank-verification API key>"
+az keyvault secret set --vault-name <key_vault_name> \
+  --name backend-sandbox-bank-api-secret --value "<the real bank-verification API secret>"
+```
+
+**No new Key Vault secret commands are needed for GST specifically** — it reuses
+`backend-sandbox-api-key`/`backend-sandbox-api-secret` above rather than getting its own.
 
 Nothing further to run by hand — the next push to `develop` (or a manual `workflow_dispatch`) picks
 both up automatically and updates the Container App. To confirm before/without a full pipeline run,
@@ -440,8 +531,10 @@ quirk, unrelated to the app or to how Azure's build pipeline will behave.
   (`ClockConfig`), independent of the container host's or JVM's default timezone — no `TZ` env var is
   needed for "today" to resolve correctly against Indian statutory dates.
 - See **FRONTEND_HANDOVER.md** for the complete API reference (every endpoint, every error code) and
-  **postman/** for four ready-to-import Postman collections, split by module (Auth & Account, RBAC &
-  Staff, Masterdata, Health) rather than bundled into one file — both are kept current as the API
-  evolves. The frontend dev has already integrated against Auth & Account and RBAC & Staff; keep the
-  pre-rename `staff.*`/`roles.*` permission codes in mind as a real, not just theoretical, compatibility
-  concern if either of those is ever touched again.
+  **postman/** for eight ready-to-import Postman collections, split by module (Auth & Account, RBAC &
+  Staff, Masterdata, Health, Worker, Worker-KYC, Worker-FaceAuth, and Company) rather than bundled
+  into one file — both are kept current as the API evolves. The Company collection
+  (`ATW-Company.postman_collection.json`) is new this same round, alongside GST verification. The
+  frontend dev has already integrated against Auth & Account and RBAC & Staff; keep the pre-rename
+  `staff.*`/`roles.*` permission codes in mind as a real, not just theoretical, compatibility concern
+  if either of those is ever touched again.

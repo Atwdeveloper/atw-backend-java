@@ -30,6 +30,12 @@ import in.anytimework.atwbackend.worker.domain.AddressType;
 import in.anytimework.atwbackend.worker.domain.Gender;
 import in.anytimework.atwbackend.worker.domain.WorkerStatus;
 import in.anytimework.atwbackend.worker.domain.WorkerStatusHistoryRepository;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,7 +44,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.nio.charset.StandardCharsets;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,7 +59,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Covers the listing-API enhancement added on top of {@link WorkerService}'s original CRUD/status
  * surface (see {@link WorkerServiceIntegrationTest} for that original coverage, left untouched):
- * multiselect list filters, {@code bulkUpdateStatus}, {@code exportToCsv}, and single/bulk
+ * multiselect list filters, {@code bulkUpdateStatus}, {@code exportToExcel}, and single/bulk
  * {@code delete} - a soft delete (sets {@code deleted_at}, guarded by the worker being non-ACTIVE)
  * that preserves every satellite row and frees the worker's mobile number for reuse; see
  * {@code Worker}'s class-level Javadoc and {@code WorkerService.delete()}'s Javadoc for the full
@@ -135,6 +142,27 @@ class WorkerBulkOperationsIntegrationTest {
 
     private static WorkerSearchCriteria emptyCriteria() {
         return new WorkerSearchCriteria(null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * Reads a .xlsx export's cells back into a list of rows (row 0 is the header), each cell a
+     * {@link String} or {@code null} for a blank cell - the same shape {@code ExcelWriter.write}
+     * takes rows in, read back out.
+     */
+    private static List<List<String>> readExcelRows(byte[] xlsxBytes) throws IOException {
+        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(xlsxBytes))) {
+            Sheet sheet = workbook.getSheetAt(0);
+            List<List<String>> rows = new ArrayList<>();
+            for (Row row : sheet) {
+                List<String> cells = new ArrayList<>();
+                for (int i = 0; i < row.getLastCellNum(); i++) {
+                    Cell cell = row.getCell(i);
+                    cells.add(cell == null || cell.getCellType() == CellType.BLANK ? null : cell.getStringCellValue());
+                }
+                rows.add(cells);
+            }
+            return rows;
+        }
     }
 
     // ---- Multiselect filters ------------------------------------------------------------------
@@ -258,22 +286,22 @@ class WorkerBulkOperationsIntegrationTest {
     }
 
     @Test
-    void exportToCsv_includesCityAndStateColumns() {
+    void exportToExcel_includesCityAndStateColumns() throws IOException {
         DepartmentResponse department = createDepartment();
-        DesignationResponse designation = createDesignation("AddressInCsv");
+        DesignationResponse designation = createDesignation("AddressInExcel");
         StateCity stateCity = seededStateCitiesWithCities(1).get(0);
         WorkerResponse worker = createWorker(department, designation.id());
         addressService.update(worker.id(), AddressType.PERMANENT,
                 new UpdateWorkerAddressRequest("1 Permanent St", null, stateCity.stateId(), stateCity.cityId(), "100001"));
 
-        byte[] csvBytes = workerService.exportToCsv(Set.of(worker.id()), emptyCriteria());
-        String csv = new String(csvBytes, StandardCharsets.UTF_8);
-        List<String> lines = List.of(csv.split("\r\n"));
+        byte[] xlsxBytes = workerService.exportToExcel(Set.of(worker.id()), emptyCriteria());
+        List<List<String>> rows = readExcelRows(xlsxBytes);
 
-        assertThat(lines.get(0)).isEqualTo("Worker Code,First Name,Last Name,Mobile Number,Status,KYC Status,"
-                + "Designation,Department,Current City,Current State,Permanent City,Permanent State,Face Enrolled");
-        assertThat(lines).anyMatch(line -> line.startsWith(worker.workerCode())
-                && line.contains(stateCity.cityName()) && line.contains(stateCity.stateName()));
+        assertThat(rows.get(0)).containsExactly("Worker Code", "First Name", "Last Name", "Mobile Number", "Status",
+                "KYC Status", "Designation", "Department", "Current City", "Current State", "Permanent City",
+                "Permanent State", "Face Enrolled");
+        assertThat(rows).anyMatch(row -> worker.workerCode().equals(row.get(0))
+                && stateCity.cityName().equals(row.get(10)) && stateCity.stateName().equals(row.get(11)));
     }
 
     // ---- search ---------------------------------------------------------------------------------
@@ -381,51 +409,53 @@ class WorkerBulkOperationsIntegrationTest {
         assertThat(workerService.get(succeeds.id()).status()).isEqualTo(WorkerStatus.INACTIVE);
     }
 
-    // ---- exportToCsv ------------------------------------------------------------------------------
+    // ---- exportToExcel ------------------------------------------------------------------------------
 
     @Test
-    void exportToCsv_byIds_containsExpectedWorkerCodeAndColumns() {
+    void exportToExcel_byIds_containsExpectedWorkerCodeAndColumns() throws IOException {
         DepartmentResponse department = createDepartment();
         DesignationResponse designation = createDesignation("ExportById");
         WorkerResponse worker = createWorker(department, designation.id());
 
-        byte[] csvBytes = workerService.exportToCsv(Set.of(worker.id()), emptyCriteria());
-        String csv = new String(csvBytes, StandardCharsets.UTF_8);
+        byte[] xlsxBytes = workerService.exportToExcel(Set.of(worker.id()), emptyCriteria());
+        List<List<String>> rows = readExcelRows(xlsxBytes);
 
-        assertThat(csv).startsWith("Worker Code,First Name,Last Name,Mobile Number,Status,KYC Status,Designation,Department");
-        assertThat(csv).contains(worker.workerCode());
-        assertThat(csv).contains(worker.mobileNumber());
-        assertThat(csv).contains(designation.name());
-        assertThat(csv).contains(department.name());
+        assertThat(rows.get(0)).containsExactly("Worker Code", "First Name", "Last Name", "Mobile Number", "Status",
+                "KYC Status", "Designation", "Department", "Current City", "Current State", "Permanent City",
+                "Permanent State", "Face Enrolled");
+        List<String> dataRow = rows.get(1);
+        assertThat(dataRow.get(0)).isEqualTo(worker.workerCode());
+        assertThat(dataRow.get(3)).isEqualTo(worker.mobileNumber());
+        assertThat(dataRow.get(6)).isEqualTo(designation.name());
+        assertThat(dataRow.get(7)).isEqualTo(department.name());
     }
 
     @Test
-    void exportToCsv_withNoIds_fallsBackToFilterCriteria() {
+    void exportToExcel_withNoIds_fallsBackToFilterCriteria() throws IOException {
         DepartmentResponse department = createDepartment();
         DesignationResponse designation = createDesignation("ExportByFilter");
         WorkerResponse worker = createWorker(department, designation.id());
 
-        byte[] csvBytes = workerService.exportToCsv(Set.of(),
+        byte[] xlsxBytes = workerService.exportToExcel(Set.of(),
                 new WorkerSearchCriteria(null, null, null, Set.of(designation.id()), null, null, null, null, null, null, null));
-        String csv = new String(csvBytes, StandardCharsets.UTF_8);
+        List<List<String>> rows = readExcelRows(xlsxBytes);
 
-        assertThat(csv).contains(worker.workerCode());
+        assertThat(rows).anyMatch(row -> worker.workerCode().equals(row.get(0)));
     }
 
     @Test
-    void exportToCsv_quotesFieldsContainingACommaOrQuote() {
+    void exportToExcel_preservesCommasAndQuotesInCellValues() throws IOException {
         DepartmentResponse department = createDepartment();
         DesignationResponse designation = createDesignation("ExportQuoting");
         String trickyLastName = "Quoted \"Nickname\", Surname " + unique();
         WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, trickyLastName, null, Gender.MALE,
                 null, uniqueMobile(), null, department.id(), null, null, Set.of(designation.id()), designation.id(), Set.of()));
 
-        byte[] csvBytes = workerService.exportToCsv(Set.of(worker.id()), emptyCriteria());
-        String csv = new String(csvBytes, StandardCharsets.UTF_8);
+        byte[] xlsxBytes = workerService.exportToExcel(Set.of(worker.id()), emptyCriteria());
+        List<List<String>> rows = readExcelRows(xlsxBytes);
 
-        // RFC 4180: the whole field is wrapped in quotes, and any literal quote inside it is doubled.
-        String expectedEscaped = "\"" + trickyLastName.replace("\"", "\"\"") + "\"";
-        assertThat(csv).contains(expectedEscaped);
+        // Unlike CSV, a .xlsx cell needs no comma/quote escaping - the raw value is stored as-is in its own cell.
+        assertThat(rows).anyMatch(row -> trickyLastName.equals(row.get(2)));
     }
 
     // ---- face enrollment data in listing/detail/export ------------------------------------------
@@ -469,21 +499,21 @@ class WorkerBulkOperationsIntegrationTest {
     }
 
     @Test
-    void exportToCsv_includesFaceEnrolledColumn() {
+    void exportToExcel_includesFaceEnrolledColumn() throws IOException {
         DepartmentResponse department = createDepartment();
-        DesignationResponse designation = createDesignation("FaceEnrollCsv");
+        DesignationResponse designation = createDesignation("FaceEnrollExcel");
         WorkerResponse enrolledWorker = createWorker(department, designation.id());
         WorkerResponse unenrolledWorker = createWorker(department, designation.id());
         faceAuthService.enroll(enrolledWorker.id(), "face.jpg", "image/jpeg", FAKE_JPEG_BYTES, true, "127.0.0.1");
 
-        byte[] csvBytes = workerService.exportToCsv(Set.of(enrolledWorker.id(), unenrolledWorker.id()), emptyCriteria());
-        String csv = new String(csvBytes, StandardCharsets.UTF_8);
-        List<String> lines = List.of(csv.split("\r\n"));
+        byte[] xlsxBytes = workerService.exportToExcel(Set.of(enrolledWorker.id(), unenrolledWorker.id()), emptyCriteria());
+        List<List<String>> rows = readExcelRows(xlsxBytes);
 
-        assertThat(lines.get(0)).isEqualTo("Worker Code,First Name,Last Name,Mobile Number,Status,KYC Status,"
-                + "Designation,Department,Current City,Current State,Permanent City,Permanent State,Face Enrolled");
-        assertThat(lines).anyMatch(line -> line.startsWith(enrolledWorker.workerCode()) && line.endsWith(",Yes"));
-        assertThat(lines).anyMatch(line -> line.startsWith(unenrolledWorker.workerCode()) && line.endsWith(",No"));
+        assertThat(rows.get(0)).containsExactly("Worker Code", "First Name", "Last Name", "Mobile Number", "Status",
+                "KYC Status", "Designation", "Department", "Current City", "Current State", "Permanent City",
+                "Permanent State", "Face Enrolled");
+        assertThat(rows).anyMatch(row -> enrolledWorker.workerCode().equals(row.get(0)) && "Yes".equals(row.get(12)));
+        assertThat(rows).anyMatch(row -> unenrolledWorker.workerCode().equals(row.get(0)) && "No".equals(row.get(12)));
     }
 
     // ---- delete / bulkDelete --------------------------------------------------------------------

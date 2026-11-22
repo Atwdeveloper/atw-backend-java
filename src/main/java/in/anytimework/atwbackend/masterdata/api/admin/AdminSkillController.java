@@ -132,7 +132,7 @@ public class AdminSkillController {
                             { "success": true, "data": { "id": "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a", "name": "Brick Laying", "designationId": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "designationName": "Mason", "status": "ACTIVE", "imageUrl": null }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "`designationId` does not exist",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
-                            { "success": false, "data": null, "error": { "code": "VALIDATION_ERROR", "message": "Unknown designation id: 00000000-0000-4000-8000-000000000000", "fieldErrors": null, "timestamp": "2026-11-01T10:15:00Z", "traceId": "071829303a4b5c6d" } }"""))),
+                            { "success": false, "data": null, "error": { "code": "VALIDATION_ERROR", "message": "Unknown designation.", "fieldErrors": null, "timestamp": "2026-11-01T10:15:00Z", "traceId": "071829303a4b5c6d" } }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "A skill with this name already exists under this designation",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "CONFLICT", "message": "A skill named 'Brick Laying' already exists under this designation.", "fieldErrors": null, "timestamp": "2026-11-01T10:15:30Z", "traceId": "1829303a4b5c6d07" } }""")))

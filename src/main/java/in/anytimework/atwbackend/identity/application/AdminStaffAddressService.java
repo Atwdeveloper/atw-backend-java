@@ -6,7 +6,9 @@ import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserAddress;
 import in.anytimework.atwbackend.identity.domain.AdminUserAddressRepository;
 import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
+import in.anytimework.atwbackend.masterdata.application.lookup.CitySummary;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
+import in.anytimework.atwbackend.masterdata.application.lookup.StateSummary;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
@@ -14,6 +16,7 @@ import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Set;
 import java.util.UUID;
 
 /** Ordinary demographic address data for a staff member - no masking needed, unlike KYC/bank detail. */
@@ -39,7 +42,7 @@ public class AdminStaffAddressService {
     public AdminUserAddressResponse get(UUID staffId) {
         requireStaffExists(staffId);
         return addresses.findByAdminUserId(staffId).map(this::toDto)
-                .orElse(new AdminUserAddressResponse(null, null, null, null, null, null, null, null));
+                .orElse(new AdminUserAddressResponse(null, null, null, null, null, null, null, null, null, null));
     }
 
     @Transactional
@@ -68,8 +71,16 @@ public class AdminStaffAddressService {
 
     private AdminUserAddressResponse toDto(AdminUserAddress entity) {
         var address = entity.getAddress();
-        return new AdminUserAddressResponse(address.getLine1(), address.getLine2(), address.getStateId(),
-                address.getCityId(), address.getPincode(), address.getLatitude(), address.getLongitude(),
+        // Same single-row city/state resolution as WorkerService's own address-for-display mapping -
+        // see that class's private address-view builder.
+        String stateName = address.getStateId() == null ? null
+                : geography.listStates().stream().filter(s -> s.id().equals(address.getStateId()))
+                        .findFirst().map(StateSummary::name).orElse(null);
+        String cityName = address.getCityId() == null ? null
+                : geography.listCitiesByIds(Set.of(address.getCityId())).stream()
+                        .findFirst().map(CitySummary::name).orElse(null);
+        return new AdminUserAddressResponse(address.getLine1(), address.getLine2(), address.getStateId(), stateName,
+                address.getCityId(), cityName, address.getPincode(), address.getLatitude(), address.getLongitude(),
                 address.getFormattedAddress());
     }
 }

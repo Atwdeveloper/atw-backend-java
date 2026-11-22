@@ -11,10 +11,13 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -42,10 +45,12 @@ class FaceAuthServiceIdentifyTest {
     private final DocumentService documentService = mock(DocumentService.class);
     private final FaceIdentifyProperties identifyProperties = new FaceIdentifyProperties(0.6, 0.05);
     private final FaceDuplicateProperties duplicateProperties = new FaceDuplicateProperties(0.5);
+    private final WorkerDisplayLookup workerDisplayLookup = mock(WorkerDisplayLookup.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-16T06:00:00Z"), ZoneOffset.UTC);
 
     private final FaceAuthServiceImpl service = new FaceAuthServiceImpl(
-            enrollments, faceAuthPort, photoSupport, documentService, identifyProperties, duplicateProperties, clock);
+            enrollments, faceAuthPort, photoSupport, documentService, identifyProperties, duplicateProperties,
+            workerDisplayLookup, clock);
 
     private static final byte[] PROBE_BYTES = {1, 2, 3};
     private static final FaceQualitySnapshot ACCEPTABLE_QUALITY = new FaceQualitySnapshot(400, 0.9, 0.5, true, List.of());
@@ -85,14 +90,21 @@ class FaceAuthServiceIdentifyTest {
                 enrollmentWithEmbedding(matching, vectorWithCosine(1.0)),   // score 1.0 vs probe
                 enrollmentWithEmbedding(other, vectorWithCosine(0.0))));    // score 0.0 vs probe - orthogonal
         stubProbeEmbedding(vectorWithCosine(1.0)); // probe == (1,0,0,...)
+        when(workerDisplayLookup.findByIds(Set.of(matching, other))).thenReturn(Map.of(
+                matching, new WorkerDisplayInfo("Matching Worker", "WRK0000001"),
+                other, new WorkerDisplayInfo("Other Worker", "WRK0000002")));
 
         FaceIdentificationResult result = service.identify(PROBE_BYTES, "image/jpeg");
 
         assertThat(result.matched()).isTrue();
         assertThat(result.workerId()).isEqualTo(matching);
+        // The whole point of Identify is naming who the photo belongs to - a raw id alone isn't enough.
+        assertThat(result.workerName()).isEqualTo("Matching Worker");
         assertThat(result.ambiguous()).isFalse();
         assertThat(result.bestScore()).isCloseTo(1.0, within(1e-6));
         assertThat(result.topMatches()).hasSize(2);
+        assertThat(result.topMatches()).extracting("workerId", "workerName")
+                .contains(tuple(matching, "Matching Worker"), tuple(other, "Other Worker"));
     }
 
     @Test

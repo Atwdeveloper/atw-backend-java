@@ -69,7 +69,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Worker CRUD, designation/skill assignment, status lifecycle, bulk status/delete, CSV export, and
+ * Worker CRUD, designation/skill assignment, status lifecycle, bulk status/delete, Excel export, and
  * the address/bank-detail/notes sub-resources. Every endpoint requires the matching {@code workers.*}
  * permission; bank-detail reads are additionally masked unless the caller also holds
  * {@code workers.view_bank_details} (see {@code WorkerBankDetailService}). Worker KYC itself lives under
@@ -78,7 +78,7 @@ import java.util.UUID;
  * controller.
  */
 @Tag(name = "Admin - Workers", description = "Worker CRUD, designation/skill assignment, status "
-        + "lifecycle, bulk status/delete, CSV export, and the address/bank-detail/notes sub-resources. "
+        + "lifecycle, bulk status/delete, Excel export, and the address/bank-detail/notes sub-resources. "
         + "Every endpoint requires the matching workers.* permission (holder noted per endpoint); "
         + "bank-detail reads are additionally masked unless the caller also holds kyc.view_sensitive. "
         + "Worker KYC itself (Aadhaar/PAN submission, document review) and face-biometric enrollment "
@@ -854,11 +854,11 @@ public class AdminWorkerController {
         return ApiResponse.ok(workerService.bulkDelete(request.ids()));
     }
 
-    /** Streams a raw CSV file, not the usual {@link ApiResponse} envelope - an exported file is not JSON. */
-    @Operation(summary = "Export workers to CSV", description = """
+    /** Streams a raw .xlsx file, not the usual {@link ApiResponse} envelope - an exported file is not JSON. */
+    @Operation(summary = "Export workers to Excel", description = """
             **Permission:** `workers.export`.
 
-            **Returns a raw `text/csv` file download (`Content-Disposition: attachment`), NOT the usual \
+            **Returns a raw `.xlsx` file download (`Content-Disposition: attachment`), NOT the usual \
             JSON envelope** - this is the only endpoint on this controller that doesn't return \
             `ApiResponse`. Columns, in order: Worker Code, First Name, Last Name, Mobile Number, Status, \
             KYC Status, Designation (primary designation's display name, blank if none), Department, \
@@ -868,10 +868,12 @@ public class AdminWorkerController {
             Give `ids` for an exact set (unknown ids are silently skipped); otherwise every other field \
             is an optional filter with the **exact same semantics as List Workers above** (a non-empty \
             set matches ANY of its values; every non-empty field is ANDed together). Posting `{}` \
-            exports every worker, unfiltered. The whole CSV is built in memory, not streamed row-by-row - \
-            fine at today's admin-tool scale, called out here as a known, deliberate limitation.""")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "CSV file.",
-            content = @Content(mediaType = "text/csv", schema = @Schema(type = "string", format = "binary")))
+            exports every worker, unfiltered. The whole workbook is built in memory, not streamed \
+            row-by-row - fine at today's admin-tool scale, called out here as a known, deliberate \
+            limitation.""")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Excel (.xlsx) file.",
+            content = @Content(mediaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    schema = @Schema(type = "string", format = "binary")))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller lacks workers.export.",
             content = @Content(examples = @ExampleObject(value = EX_ERROR_ACCESS_DENIED)))
     @PostMapping("/export")
@@ -880,11 +882,11 @@ public class AdminWorkerController {
         WorkerSearchCriteria criteria = new WorkerSearchCriteria(request.status(), request.departmentId(),
                 request.industryId(), request.designationId(), request.skillId(), request.kycStatus(), request.search(),
                 request.registeredFrom(), request.registeredTo(), request.stateId(), request.cityId());
-        byte[] csv = workerService.exportToCsv(request.ids(), criteria);
+        byte[] xlsx = workerService.exportToExcel(request.ids(), criteria);
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/csv"))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"workers.csv\"")
-                .body(csv);
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"workers.xlsx\"")
+                .body(xlsx);
     }
 
     @Operation(summary = "Replace a worker's designations", description = """
