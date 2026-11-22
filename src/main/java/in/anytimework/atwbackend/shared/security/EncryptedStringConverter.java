@@ -2,12 +2,15 @@ package in.anytimework.atwbackend.shared.security;
 
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 /**
  * Transparent AES-256-GCM encryption for a String column — applied per-field via
  * {@code @Convert(converter = EncryptedStringConverter.class)}, not {@code autoApply}, so only
- * fields that actually need it (KYC numbers, bank account numbers) opt in.
+ * fields that actually need it (KYC numbers, bank account numbers) opt in. Keyed by the
+ * platform-staff PII key - see {@link WorkerEncryptedStringConverter} for the worker-PII equivalent
+ * and {@link PiiEncryptionConfig} for why the two keys are kept separate.
  *
  * <p>Spring-managed (constructor-injected {@link PiiEncryptor}): Spring Data JPA registers a bean
  * container with Hibernate automatically, so a {@code @Component}-annotated converter referenced by
@@ -19,7 +22,7 @@ public class EncryptedStringConverter implements AttributeConverter<String, Stri
 
     private final PiiEncryptor encryptor;
 
-    public EncryptedStringConverter(PiiEncryptor encryptor) {
+    public EncryptedStringConverter(@Qualifier("identityPiiEncryptor") PiiEncryptor encryptor) {
         this.encryptor = encryptor;
     }
 

@@ -2,7 +2,7 @@ package in.anytimework.atwbackend.identity.application;
 
 import in.anytimework.atwbackend.identity.api.staff.dto.CreateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminRoleRef;
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.domain.AdminStatus;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
@@ -13,6 +13,11 @@ import in.anytimework.atwbackend.identity.domain.AuthTokenType;
 import in.anytimework.atwbackend.identity.domain.AdminPermission;
 import in.anytimework.atwbackend.identity.domain.AdminRole;
 import in.anytimework.atwbackend.identity.domain.AdminRoleRepository;
+import in.anytimework.atwbackend.identity.domain.AdminUserAddress;
+import in.anytimework.atwbackend.identity.domain.AdminUserAddressRepository;
+import in.anytimework.atwbackend.masterdata.application.lookup.CitySummary;
+import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
+import in.anytimework.atwbackend.masterdata.application.lookup.StateSummary;
 import in.anytimework.atwbackend.notification.application.NotificationService;
 import in.anytimework.atwbackend.notification.application.SendEmailCommand;
 import in.anytimework.atwbackend.shared.api.PageResponse;
@@ -20,18 +25,23 @@ import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.persistence.SortValidation;
+import in.anytimework.atwbackend.shared.persistence.Specifications;
 import in.anytimework.atwbackend.shared.security.OpaqueTokens;
 import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -49,10 +59,14 @@ import java.util.stream.Collectors;
 public class AdminStaffService {
 
     private static final String INVITE_TEMPLATE = "ADMIN_STAFF_INVITE";
+    /** Real, directly queryable scalar columns only - see {@link SortValidation}'s Javadoc for why. */
+    private static final Set<String> ALLOWED_SORT = Set.of("fullName", "email", "username", "createdAt", "lastLoginAt", "status");
 
     private final AdminUserRepository adminUsers;
     private final AdminRoleRepository roles;
     private final AdminAuthTokenRepository authTokens;
+    private final AdminUserAddressRepository addresses;
+    private final GeographyLookupService geography;
     private final RefreshTokenService refreshTokenService;
     private final PasswordEncoder passwordEncoder;
     private final NotificationService notificationService;
@@ -64,6 +78,7 @@ public class AdminStaffService {
     private final String frontendBaseUrl;
 
     public AdminStaffService(AdminUserRepository adminUsers, AdminRoleRepository roles, AdminAuthTokenRepository authTokens,
+                        AdminUserAddressRepository addresses, GeographyLookupService geography,
                         RefreshTokenService refreshTokenService, PasswordEncoder passwordEncoder,
                         NotificationService notificationService, AdminAuditService audit,
                         AdminSecurityProperties properties, CurrentAdmin currentAdmin,
@@ -72,6 +87,8 @@ public class AdminStaffService {
         this.adminUsers = adminUsers;
         this.roles = roles;
         this.authTokens = authTokens;
+        this.addresses = addresses;
+        this.geography = geography;
         this.refreshTokenService = refreshTokenService;
         this.passwordEncoder = passwordEncoder;
         this.notificationService = notificationService;
@@ -84,18 +101,52 @@ public class AdminStaffService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<AdminStaffDto> list(Pageable pageable) {
-        Page<AdminStaffDto> page = adminUsers.findAll(pageable).map(this::toDto);
-        return PageResponse.from(page);
+    public PageResponse<AdminStaffResponse> list(AdminStaffSearchCriteria criteria, Pageable pageable) {
+        SortValidation.assertSortable(pageable, ALLOWED_SORT);
+        List<Specification<AdminUser>> predicates = buildPredicates(criteria);
+        Page<AdminUser> page = adminUsers.findAll(Specifications.allOf(predicates), pageable);
+        Set<UUID> ids = page.getContent().stream().map(AdminUser::getId).collect(Collectors.toSet());
+        AddressNames addressNames = addressNamesByStaff(ids);
+        return PageResponse.from(page.map(admin -> toDto(admin, addressNames)));
+    }
+
+    /**
+     * Builds one {@link Specification} per non-empty {@link AdminStaffSearchCriteria} field, ANDed
+     * together by {@link Specifications#allOf} - mirrors {@code WorkerService.buildPredicates}'s
+     * exact shape. Unlike {@code WorkerService}'s KYC-status filter (a cross-module id lookup that
+     * can short-circuit to "no results"), every filter here is a direct column/subquery on
+     * {@link AdminUser} itself, so there's no empty-predicates-means-zero-results case to special-case.
+     */
+    private List<Specification<AdminUser>> buildPredicates(AdminStaffSearchCriteria criteria) {
+        List<Specification<AdminUser>> predicates = new ArrayList<>();
+        if (criteria.statuses() != null && !criteria.statuses().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasStatus(criteria.statuses()));
+        }
+        if (criteria.roleIds() != null && !criteria.roleIds().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasRole(criteria.roleIds()));
+        }
+        if (criteria.superAdmin() != null) {
+            predicates.add(AdminStaffSpecifications.isSuperAdmin(criteria.superAdmin()));
+        }
+        if (StringUtils.hasText(criteria.search())) {
+            predicates.add(AdminStaffSpecifications.matchesSearch(criteria.search()));
+        }
+        if (criteria.stateId() != null && !criteria.stateId().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasState(criteria.stateId()));
+        }
+        if (criteria.cityId() != null && !criteria.cityId().isEmpty()) {
+            predicates.add(AdminStaffSpecifications.hasCity(criteria.cityId()));
+        }
+        return predicates;
     }
 
     @Transactional(readOnly = true)
-    public AdminStaffDto get(UUID id) {
+    public AdminStaffResponse get(UUID id) {
         return toDto(findOrThrow(id));
     }
 
     @Transactional
-    public AdminStaffDto create(CreateAdminStaffRequest request, String ip, String userAgent) {
+    public AdminStaffResponse create(CreateAdminStaffRequest request, String ip, String userAgent) {
         if (adminUsers.existsByEmailIgnoreCase(request.email())) {
             throw new ConflictException("An admin with this email already exists.");
         }
@@ -119,7 +170,7 @@ public class AdminStaffService {
     }
 
     @Transactional
-    public AdminStaffDto update(UUID id, UpdateAdminStaffRequest request, String ip, String userAgent) {
+    public AdminStaffResponse update(UUID id, UpdateAdminStaffRequest request, String ip, String userAgent) {
         AdminUser admin = findOrThrow(id);
         if (admin.isSuperAdmin()) {
             throw new BusinessRuleException("Super-admin accounts cannot be modified through this endpoint.");
@@ -151,7 +202,7 @@ public class AdminStaffService {
     }
 
     @Transactional
-    public AdminStaffDto updateStatus(UUID id, AdminStatus newStatus, String ip, String userAgent) {
+    public AdminStaffResponse updateStatus(UUID id, AdminStatus newStatus, String ip, String userAgent) {
         AdminUser admin = findOrThrow(id);
         guardNotSelfOrSuperAdmin(admin, "deactivate");
         admin.setStatus(newStatus);
@@ -166,11 +217,34 @@ public class AdminStaffService {
         return toDto(admin);
     }
 
+    /**
+     * Soft-deletes a staff account: sets {@code deletedAt} (via {@link AdminUser#markDeleted}) rather
+     * than ever issuing a real SQL DELETE. {@link AdminUser}'s {@code @SQLRestriction("deleted_at is
+     * null")} then makes this admin invisible to every existing query path - {@link #findOrThrow},
+     * login lookups, the pessimistic-lock JPQL - automatically, with no other method needing to check
+     * a "deleted" flag itself.
+     *
+     * <p>Every one of this admin's own satellite rows (profile, bank detail, address, KYC - including
+     * PF/ESIC numbers that may be needed for post-departure statutory reporting - and role
+     * assignments) is left completely untouched - nothing is cascaded away, preserving full history
+     * for audit/reconciliation (their {@code ON DELETE CASCADE} FKs to {@code admin_user.id} simply
+     * never fire via this path anymore). The admin's username and email both become available again
+     * for a new hire to be created with - the same reuse-after-delete decision already made for
+     * {@code Worker}'s mobile number; see {@code V29__admin_user_soft_delete.sql}'s comment for why
+     * email reuse specifically may be worth a second look before this matters in production.</p>
+     *
+     * <p>The existing {@link #guardNotSelfOrSuperAdmin} guard (no self-delete, no deleting the
+     * bootstrap super-admin) is kept unchanged - it protects against a different risk than the
+     * hard/soft-delete mechanism and is unaffected by this change. There is deliberately no
+     * restore/undelete endpoint yet - nothing is destroyed, so one can be added later purely at the
+     * application layer, with no migration changes.</p>
+     */
     @Transactional
     public void delete(UUID id, String ip, String userAgent) {
         AdminUser admin = findOrThrow(id);
         guardNotSelfOrSuperAdmin(admin, "delete");
-        adminUsers.delete(admin);
+        admin.markDeleted(clock.instant());
+        adminUsers.save(admin);
         audit.record(currentAdmin.id().orElse(null), "ADMIN_STAFF_DELETED", id.toString(), ip, userAgent);
     }
 
@@ -218,13 +292,69 @@ public class AdminStaffService {
         return adminUsers.findById(id).orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
     }
 
-    private AdminStaffDto toDto(AdminUser admin) {
+    /** Single-record path (get/create/update/updateStatus) - one extra lookup is fine here, unlike {@link #list}. */
+    private AdminStaffResponse toDto(AdminUser admin) {
+        return toDto(admin, addressNamesByStaff(Set.of(admin.getId())));
+    }
+
+    private AdminStaffResponse toDto(AdminUser admin, AddressNames addressNames) {
         List<AdminRoleRef> roleRefs = admin.getRoles().stream()
                 .map(r -> new AdminRoleRef(r.getId(), r.getName()))
                 .sorted(Comparator.comparing(AdminRoleRef::name))
                 .toList();
-        return new AdminStaffDto(admin.getId(), admin.getUsername(), admin.getEmail(), admin.getFullName(),
+        return new AdminStaffResponse(admin.getId(), admin.getUsername(), admin.getEmail(), admin.getFullName(),
                 admin.getPhone(), admin.isSuperAdmin(), admin.getStatus(), roleRefs,
-                admin.getLastLoginAt(), admin.getCreatedAt());
+                admin.getLastLoginAt(), admin.getCreatedAt(),
+                addressNames.city().get(admin.getId()), addressNames.state().get(admin.getId()));
+    }
+
+    /**
+     * Batch-loaded (one query for the whole page, never per row) city/state **names**, keyed by
+     * staff id - mirrors {@code worker.application.WorkerService.addressNamesByWorker}'s shape, minus
+     * the current/permanent address-type split worker has (an admin/staff account has exactly one
+     * address - see {@link AdminUserAddress}'s Javadoc).
+     */
+    private record AddressNames(Map<UUID, String> city, Map<UUID, String> state) {
+    }
+
+    private AddressNames addressNamesByStaff(Set<UUID> staffIds) {
+        if (staffIds.isEmpty()) {
+            return new AddressNames(Map.of(), Map.of());
+        }
+        List<AdminUserAddress> staffAddresses = addresses.findByAdminUserIdIn(staffIds);
+        Set<UUID> cityIds = new HashSet<>();
+        Set<UUID> stateIds = new HashSet<>();
+        for (AdminUserAddress a : staffAddresses) {
+            if (a.getAddress().getCityId() != null) {
+                cityIds.add(a.getAddress().getCityId());
+            }
+            if (a.getAddress().getStateId() != null) {
+                stateIds.add(a.getAddress().getStateId());
+            }
+        }
+        Map<UUID, String> cityNameById = geography.listCitiesByIds(cityIds).stream()
+                .collect(Collectors.toMap(CitySummary::id, CitySummary::name));
+        Map<UUID, String> stateNameById = geography.listStates().stream()
+                .filter(s -> stateIds.contains(s.id()))
+                .collect(Collectors.toMap(StateSummary::id, StateSummary::name));
+
+        // Plain mutable map + explicit put, not Collectors.toMap - Map.merge (which toMap uses
+        // internally) throws NPE on a null value, and an unresolved/not-yet-set city or state id is
+        // exactly that: a legitimate null to skip, not an error.
+        Map<UUID, String> cityByStaff = new HashMap<>();
+        Map<UUID, String> stateByStaff = new HashMap<>();
+        for (AdminUserAddress a : staffAddresses) {
+            UUID cityId = a.getAddress().getCityId();
+            UUID stateId = a.getAddress().getStateId();
+            String cityName = cityId == null ? null : cityNameById.get(cityId);
+            String stateName = stateId == null ? null : stateNameById.get(stateId);
+            if (cityName != null) {
+                cityByStaff.put(a.getAdminUserId(), cityName);
+            }
+            if (stateName != null) {
+                stateByStaff.put(a.getAdminUserId(), stateName);
+            }
+        }
+        return new AddressNames(cityByStaff, stateByStaff);
     }
 }

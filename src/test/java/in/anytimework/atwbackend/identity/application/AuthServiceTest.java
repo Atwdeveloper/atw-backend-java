@@ -45,7 +45,7 @@ class AuthServiceTest {
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AdminSecurityProperties props = new AdminSecurityProperties(
             true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 3, 5, Duration.ofMinutes(15),
-            Duration.ofMinutes(30), Duration.ofDays(3), false);
+            Duration.ofMinutes(30), Duration.ofDays(3), false, null);
     private final Clock clock = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
 
     private final AuthService authService = new AuthService(adminUsers, authTokens, otpService, refreshTokenService,
@@ -66,7 +66,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_withWrongPassword_countsFailureAnd401() {
+    void login_withWrongPassword_is401AndAudited() {
         AdminUser admin = activeAdmin();
         when(adminUsers.findByUsernameIgnoreCaseOrEmailIgnoreCase("admin@example.com", "admin@example.com"))
                 .thenReturn(Optional.of(admin));
@@ -75,8 +75,7 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.login("admin@example.com", "bad", "ip", "ua"))
                 .isInstanceOf(UnauthorizedException.class);
 
-        assertThat(admin.getFailedLoginAttempts()).isEqualTo(1);
-        verify(adminUsers).save(admin);
+        verify(audit).record(eq(admin.getId()), eq("LOGIN_FAILED"), anyString(), any(), any());
         verify(otpService, never()).issue(any());
     }
 

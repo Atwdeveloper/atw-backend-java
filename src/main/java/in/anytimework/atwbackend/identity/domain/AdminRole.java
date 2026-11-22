@@ -9,6 +9,7 @@ import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToMany;
 import jakarta.persistence.Table;
 import lombok.Getter;
+import org.hibernate.annotations.BatchSize;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -31,10 +32,13 @@ public class AdminRole extends BaseEntity {
     @Column(name = "is_system", nullable = false)
     private boolean systemRole;
 
+    // BatchSize: when a page of roles is listed, their permission collections load in batches of 50
+    // instead of one query per role (N+1) - matches AdminUser.roles/Designation.industries.
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(name = "admin_role_permission",
             joinColumns = @JoinColumn(name = "role_id"),
             inverseJoinColumns = @JoinColumn(name = "permission_id"))
+    @BatchSize(size = 50)
     private Set<AdminPermission> permissions = new HashSet<>();
 
     protected AdminRole() {

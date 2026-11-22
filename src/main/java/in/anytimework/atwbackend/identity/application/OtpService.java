@@ -10,6 +10,7 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.security.SecureRandom;
 import java.time.Clock;
@@ -73,7 +74,7 @@ public class OtpService {
     }
 
     private IssuedOtp issueInternal(UUID adminUserId, int resendCount) {
-        String code = randomNumeric(properties.otpLength());
+        String code = generateCode();
         AdminOtp otp = new AdminOtp(adminUserId, OtpChannel.EMAIL, passwordEncoder.encode(code),
                 OtpPurpose.LOGIN, clock.instant().plus(properties.otpTtl()), resendCount);
         otps.save(otp);
@@ -140,6 +141,17 @@ public class OtpService {
     @Transactional
     public void invalidateAllActiveForAdmin(UUID adminUserId) {
         otps.invalidateAllActiveForAdmin(adminUserId, clock.instant());
+    }
+
+    /**
+     * Normally a fresh random code. If {@code atw.admin.security.fixed-otp} is set - only possible
+     * under the "dev" profile, enforced by {@code StartupSecurityValidator} at boot - every issued
+     * OTP (login and resend alike) is that fixed value instead, so pre-SMTP environments can log in
+     * without reading logs or email.
+     */
+    private String generateCode() {
+        String fixedOtp = properties.fixedOtp();
+        return StringUtils.hasText(fixedOtp) ? fixedOtp : randomNumeric(properties.otpLength());
     }
 
     private String randomNumeric(int length) {

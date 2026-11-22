@@ -78,8 +78,7 @@ Response (OTP required):
 ```json
 { "success": true, "data": { "otpRequired": true, "challengeId": "7b1e...-uuid" } }
 ```
-Errors: `401 UNAUTHORIZED` (invalid credentials / disabled / temporarily locked after 5 failed tries),
-`400 VALIDATION_ERROR` (missing fields).
+Errors: `401 UNAUTHORIZED` (invalid credentials / disabled), `400 VALIDATION_ERROR` (missing fields).
 
 #### POST `/verify-otp`
 Request:
@@ -171,26 +170,26 @@ Errors: `401 UNAUTHORIZED` (no token), `403 ACCESS_DENIED` (lacks `admin_roles.v
 
 | Method & path | Permission | Body | Notes |
 |---|---|---|---|
-| `GET /` | `admin_staff.view` | — (query: `page`, `size`, `sort`) | `PageResponse<AdminStaffDto>` |
-| `GET /{id}` | `admin_staff.view` | — | `AdminStaffDto` |
+| `GET /` | `admin_staff.view` | — (query: `page`, `size`, `sort`) | `PageResponse<AdminStaffResponse>` |
+| `GET /{id}` | `admin_staff.view` | — | `AdminStaffResponse` |
 | `POST /` | `admin_staff.create` | `{username?, email, fullName, phone?, roleIds[]}` | Creates the account (random, never-disclosed password) and emails an invite link — see 3.1 `/accept-invite`. No `superAdmin` field; that stays bootstrap-only. |
 | `PUT /{id}` | `admin_staff.edit` | `{username?, fullName, phone?, roleIds[]}` | Full replace of roles. Email is not editable here. |
 | `POST /{id}/status` | `admin_staff.toggle_status` | `{status: "ACTIVE"\|"DISABLED"}` | Explicit target status (not a blind toggle). Disabling revokes all of that admin's sessions immediately. Blocked against your own account and against super-admin accounts. |
 | `DELETE /{id}` | `admin_staff.delete` | — | Blocked against your own account and against super-admin accounts. |
 
-`AdminStaffDto`: `{id, username, email, fullName, phone, superAdmin, status, roles:[{id,name}], lastLoginAt, createdAt}`.
+`AdminStaffResponse`: `{id, username, email, fullName, phone, superAdmin, status, roles:[{id,name}], lastLoginAt, createdAt}`.
 
 ### 3.5 Roles — `/api/v1/admin/roles` (requires `admin_roles.*` permission)
 
 | Method & path | Permission | Body | Notes |
 |---|---|---|---|
-| `GET /` | `admin_roles.view` | — | `AdminRoleDto[]` |
-| `GET /{id}` | `admin_roles.view` | — | `AdminRoleDto` |
+| `GET /` | `admin_roles.view` | — | `AdminRoleResponse[]` |
+| `GET /{id}` | `admin_roles.view` | — | `AdminRoleResponse` |
 | `POST /` | `admin_roles.create` | `{name, description?, permissionCodes[]}` | `409 CONFLICT` on a duplicate name |
 | `PUT /{id}` | `admin_roles.edit` | `{name, description?, permissionCodes[]}` | Full replace of permissions. `422 BUSINESS_RULE_VIOLATION` on a system role. |
 | `DELETE /{id}` | `admin_roles.delete` | — | `422 BUSINESS_RULE_VIOLATION` on a system role; `409 CONFLICT` if staff are still assigned to it. |
 
-`AdminRoleDto`: `{id, name, description, systemRole, permissionCodes[]}`. Unknown permission codes in a
+`AdminRoleResponse`: `{id, name, description, systemRole, permissionCodes[]}`. Unknown permission codes in a
 create/update request return `400 VALIDATION_ERROR`.
 
 ### 3.6 Staff profile / KYC / bank detail — `/api/v1/admin/staff/{id}/{profile|kyc|bank-detail}`
@@ -239,7 +238,6 @@ The permission catalog (modules → actions) is the authority list — fetch it 
 | Access token TTL | `JWT_ACCESS_TTL` | `PT15M` |
 | Refresh token TTL | `JWT_REFRESH_TTL` | `P7D` |
 | OTP validity | `ADMIN_OTP_TTL` | `PT10M` |
-| Login lockout after N fails | `ADMIN_MAX_FAILED_LOGINS` | `5` |
 | JWT signing secret | `JWT_SECRET` | dev placeholder (set in Key Vault for real envs) |
 | PII encryption key (KYC/bank, AES-256) | `PII_ENCRYPTION_KEY` | dev placeholder (set in Key Vault for real envs) |
 | Rate limit on/off, cap, window | `ADMIN_RATE_LIMIT_ENABLED` / `_MAX_ATTEMPTS` / `_WINDOW` | `true` / `10` / `PT1M` |

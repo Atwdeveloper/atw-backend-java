@@ -2,7 +2,9 @@ package in.anytimework.atwbackend.identity.infrastructure;
 
 import in.anytimework.atwbackend.identity.application.AdminBootstrapProperties;
 import in.anytimework.atwbackend.identity.application.AdminSecurityProperties;
+import in.anytimework.atwbackend.shared.security.CompanyPiiEncryptionProperties;
 import in.anytimework.atwbackend.shared.security.PiiEncryptionProperties;
+import in.anytimework.atwbackend.shared.security.WorkerPiiEncryptionProperties;
 import in.anytimework.atwbackend.shared.security.jwt.JwtProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.env.Environment;
@@ -28,20 +30,48 @@ class StartupSecurityValidatorTest {
 
     private static final String VALID_JWT_SECRET = "a-sufficiently-long-and-unique-production-jwt-secret-value";
     private static final String VALID_PII_KEY = Base64.getEncoder().encodeToString(new byte[32]);
+    private static final WorkerPiiEncryptionProperties VALID_WORKER_PII =
+            new WorkerPiiEncryptionProperties(Base64.getEncoder().encodeToString(new byte[32]));
+    private static final CompanyPiiEncryptionProperties VALID_COMPANY_PII =
+            new CompanyPiiEncryptionProperties(Base64.getEncoder().encodeToString(new byte[32]));
 
     private final Environment environment = mock(Environment.class);
     private final AdminBootstrapProperties bootstrapProperties =
             new AdminBootstrapProperties(false, null, null, null, null);
 
     private StartupSecurityValidator validator(PiiEncryptionProperties pii, AdminSecurityProperties admin) {
+        return validator(pii, VALID_WORKER_PII, VALID_COMPANY_PII, admin);
+    }
+
+    private StartupSecurityValidator validator(PiiEncryptionProperties pii, WorkerPiiEncryptionProperties workerPii,
+                                               AdminSecurityProperties admin) {
+        return validator(pii, workerPii, VALID_COMPANY_PII, admin);
+    }
+
+    private StartupSecurityValidator validator(PiiEncryptionProperties pii, WorkerPiiEncryptionProperties workerPii,
+                                               CompanyPiiEncryptionProperties companyPii, AdminSecurityProperties admin) {
         when(environment.acceptsProfiles(any(Profiles.class))).thenReturn(false);
         JwtProperties jwt = new JwtProperties(VALID_JWT_SECRET, Duration.ofMinutes(15), Duration.ofDays(7), "atw-backend");
-        return new StartupSecurityValidator(environment, jwt, bootstrapProperties, pii, admin);
+        return new StartupSecurityValidator(environment, jwt, bootstrapProperties, pii, workerPii, companyPii, admin);
+    }
+
+    /** Simulates the "dev" profile being active - and only "dev", not local/test too. */
+    private StartupSecurityValidator devProfileValidator(PiiEncryptionProperties pii, AdminSecurityProperties admin) {
+        Environment devEnvironment = mock(Environment.class);
+        when(devEnvironment.acceptsProfiles(any(Profiles.class)))
+                .thenAnswer(invocation -> ((Profiles) invocation.getArgument(0)).matches("dev"::equals));
+        JwtProperties jwt = new JwtProperties(VALID_JWT_SECRET, Duration.ofMinutes(15), Duration.ofDays(7), "atw-backend");
+        return new StartupSecurityValidator(devEnvironment, jwt, bootstrapProperties, pii, VALID_WORKER_PII,
+                VALID_COMPANY_PII, admin);
     }
 
     private static AdminSecurityProperties adminSecurity(boolean otpInResponse) {
+        return adminSecurity(otpInResponse, null);
+    }
+
+    private static AdminSecurityProperties adminSecurity(boolean otpInResponse, String fixedOtp) {
         return new AdminSecurityProperties(true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 3, 5,
-                Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofDays(3), otpInResponse);
+                Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofDays(3), otpInResponse, fixedOtp);
     }
 
     @Test
@@ -80,9 +110,121 @@ class StartupSecurityValidatorTest {
     }
 
     @Test
+    void missingWorkerPiiKey_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties(null), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("WORKER_PII_ENCRYPTION_KEY");
+    }
+
+    @Test
+    void workerPiiKeyWrongByteLength_throws() {
+        String tooShort = Base64.getEncoder().encodeToString(new byte[16]);
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties(tooShort), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("32 bytes");
+    }
+
+    @Test
+    void workerPiiKeyEqualsKnownLocalLiteral_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties("c8ZWWQX6uaMDrKhuKJU8cwyz80sraP4EdBWcKfHZ4WM="), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("publicly-committed local-dev value");
+    }
+
+    @Test
+    void workerPiiKeyNotValidBase64_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties("not-valid-base64!!"), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void workerPiiKeyEqualsIdentityKey_doesNotThrow() {
+        // Confirms the two keys are validated independently - reusing the (valid) identity key value
+        // for the worker key is not itself flagged as the known-local-literal case.
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY),
+                new WorkerPiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false));
+        assertThatCode(() -> v.run(null)).doesNotThrowAnyException();
+    }
+
+    // ---- company PII key (added alongside the company module - CompanyPiiEncryptionProperties) ----
+
+    @Test
+    void missingCompanyPiiKey_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), VALID_WORKER_PII,
+                new CompanyPiiEncryptionProperties(null), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("COMPANY_PII_ENCRYPTION_KEY");
+    }
+
+    @Test
+    void companyPiiKeyWrongByteLength_throws() {
+        String tooShort = Base64.getEncoder().encodeToString(new byte[16]);
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), VALID_WORKER_PII,
+                new CompanyPiiEncryptionProperties(tooShort), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("32 bytes");
+    }
+
+    @Test
+    void companyPiiKeyEqualsKnownLocalLiteral_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), VALID_WORKER_PII,
+                new CompanyPiiEncryptionProperties("Kwb3C/mwniu9+FHglHDYdXObxrzBILTeSIncV96oCsQ="), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("publicly-committed local-dev value");
+    }
+
+    @Test
+    void companyPiiKeyNotValidBase64_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), VALID_WORKER_PII,
+                new CompanyPiiEncryptionProperties("not-valid-base64!!"), adminSecurity(false));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void companyPiiKeyEqualsIdentityKey_doesNotThrow() {
+        // Same independent-validation guarantee as workerPiiKeyEqualsIdentityKey_doesNotThrow, for the
+        // third (company) key.
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), VALID_WORKER_PII,
+                new CompanyPiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false));
+        assertThatCode(() -> v.run(null)).doesNotThrowAnyException();
+    }
+
+    @Test
     void otpInResponseEnabled_throws() {
         StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(true));
         assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("otp-in-response");
+    }
+
+    @Test
+    void fixedOtpSetOutsideDevProfile_throws() {
+        StartupSecurityValidator v = validator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "123456"));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ADMIN_FIXED_OTP")
+                .hasMessageContaining("\"dev\"");
+    }
+
+    @Test
+    void fixedOtpValidUnderDevProfile_doesNotThrow() {
+        StartupSecurityValidator v = devProfileValidator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "123456"));
+        assertThatCode(() -> v.run(null)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void fixedOtpWrongLengthUnderDevProfile_throws() {
+        StartupSecurityValidator v = devProfileValidator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "12345"));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("6 numeric digits");
+    }
+
+    @Test
+    void fixedOtpNonNumericUnderDevProfile_throws() {
+        StartupSecurityValidator v = devProfileValidator(new PiiEncryptionProperties(VALID_PII_KEY), adminSecurity(false, "12345a"));
+        assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("numeric digits");
     }
 }

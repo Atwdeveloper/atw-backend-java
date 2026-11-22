@@ -1,21 +1,29 @@
 package in.anytimework.atwbackend.identity.application;
 
 import in.anytimework.atwbackend.identity.api.role.dto.CreateAdminRoleRequest;
-import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleDto;
+import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleResponse;
 import in.anytimework.atwbackend.identity.api.role.dto.UpdateAdminRoleRequest;
 import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
 import in.anytimework.atwbackend.identity.domain.AdminPermission;
 import in.anytimework.atwbackend.identity.domain.AdminPermissionRepository;
 import in.anytimework.atwbackend.identity.domain.AdminRole;
 import in.anytimework.atwbackend.identity.domain.AdminRoleRepository;
+import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.persistence.SortValidation;
+import in.anytimework.atwbackend.shared.persistence.Specifications;
 import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -29,6 +37,9 @@ import java.util.stream.Collectors;
  */
 @Service
 public class AdminRoleService {
+
+    /** Real, directly queryable scalar columns only - see {@link SortValidation}'s Javadoc for why. */
+    private static final Set<String> ALLOWED_SORT = Set.of("name", "createdAt", "updatedAt");
 
     private final AdminRoleRepository roles;
     private final AdminPermissionRepository permissions;
@@ -47,18 +58,36 @@ public class AdminRoleService {
         this.escalationGuard = escalationGuard;
     }
 
+    /**
+     * Paginated, filterable listing - returns {@link PageResponse}, **not** the flat {@code List}
+     * this endpoint returned before. A deliberate, known breaking change to an existing response
+     * shape: any caller still expecting a bare array must be updated to read {@code data.content}
+     * instead. Follows {@code WorkerService}/{@code AdminStaffService}'s established
+     * {@code Specification} + {@link SortValidation} pattern for consistency, even though only 4
+     * roles exist today - the role count being small now doesn't change what "proper pagination,
+     * search, and sort" as requested means.
+     */
     @Transactional(readOnly = true)
-    public List<AdminRoleDto> list() {
-        return roles.findAll().stream().map(this::toDto).toList();
+    public PageResponse<AdminRoleResponse> list(String search, Boolean systemRole, Pageable pageable) {
+        SortValidation.assertSortable(pageable, ALLOWED_SORT);
+        List<Specification<AdminRole>> predicates = new ArrayList<>();
+        if (StringUtils.hasText(search)) {
+            predicates.add(AdminRoleSpecifications.matchesSearch(search));
+        }
+        if (systemRole != null) {
+            predicates.add(AdminRoleSpecifications.isSystemRole(systemRole));
+        }
+        Page<AdminRole> page = roles.findAll(Specifications.allOf(predicates), pageable);
+        return PageResponse.from(page.map(this::toDto));
     }
 
     @Transactional(readOnly = true)
-    public AdminRoleDto get(UUID id) {
+    public AdminRoleResponse get(UUID id) {
         return toDto(findOrThrow(id));
     }
 
     @Transactional
-    public AdminRoleDto create(CreateAdminRoleRequest request, String ip, String userAgent) {
+    public AdminRoleResponse create(CreateAdminRoleRequest request, String ip, String userAgent) {
         if (roles.existsByName(request.name())) {
             throw new ConflictException("A role named '" + request.name() + "' already exists.");
         }
@@ -79,7 +108,7 @@ public class AdminRoleService {
     }
 
     @Transactional
-    public AdminRoleDto update(UUID id, UpdateAdminRoleRequest request, String ip, String userAgent) {
+    public AdminRoleResponse update(UUID id, UpdateAdminRoleRequest request, String ip, String userAgent) {
         AdminRole role = findOrThrow(id);
         if (role.isSystemRole()) {
             throw new BusinessRuleException("System roles cannot be modified.");
@@ -134,8 +163,8 @@ public class AdminRoleService {
         return roles.findById(id).orElseThrow(() -> new ResourceNotFoundException("Role not found"));
     }
 
-    private AdminRoleDto toDto(AdminRole role) {
+    private AdminRoleResponse toDto(AdminRole role) {
         List<String> codes = role.getPermissions().stream().map(AdminPermission::getCode).sorted().toList();
-        return new AdminRoleDto(role.getId(), role.getName(), role.getDescription(), role.isSystemRole(), codes);
+        return new AdminRoleResponse(role.getId(), role.getName(), role.getDescription(), role.isSystemRole(), codes);
     }
 }

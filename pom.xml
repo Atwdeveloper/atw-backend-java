@@ -87,6 +87,12 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-mail</artifactId>
 		</dependency>
+		<!-- RestClient.Builder auto-configuration (Boot 4 split this out of webmvc), used by
+		     FaceAuthClientConfig when atw.face-auth.provider=python -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-restclient</artifactId>
+		</dependency>
 
 		<!-- Flyway database migrations (versions managed by Spring Boot BOM) -->
 		<!-- spring-boot-flyway carries the Boot 4 auto-configuration that runs
@@ -203,9 +209,23 @@
 			<artifactId>awaitility</artifactId>
 			<scope>test</scope>
 		</dependency>
+
+		<!-- Apache POI: .xlsx writing engine for the shared ExcelWriter export utility (shared.export).
+		     No Spring Boot starter exists for this, so the version is pinned explicitly rather than BOM-managed. -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi</artifactId>
+			<version>5.5.1</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml</artifactId>
+			<version>5.5.1</version>
+		</dependency>
 	</dependencies>
 
 	<build>
+		<finalName>app</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
@@ -222,6 +242,12 @@
 							<goal>compile</goal>
 						</goals>
 						<configuration>
+							<!-- fork=true: in-process javac (the default) has been observed to crash with an
+							     internal NPE ("Cannot load from object array because this.hashes is null")
+							     on this JDK/compiler-plugin combination whenever there are several compile
+							     errors to report at once - forking runs javac in its own process instead,
+							     which does not hit this. Harmless otherwise, just a marginally slower start. -->
+							<fork>true</fork>
 							<annotationProcessorPaths>
 								<path>
 									<groupId>org.projectlombok</groupId>
@@ -237,6 +263,8 @@
 							<goal>testCompile</goal>
 						</goals>
 						<configuration>
+							<!-- See the default-compile execution above for why fork=true is needed here. -->
+							<fork>true</fork>
 							<annotationProcessorPaths>
 								<path>
 									<groupId>org.projectlombok</groupId>

@@ -1,6 +1,6 @@
 package in.anytimework.atwbackend.identity.application;
 
-import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycDto;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateKycRequest;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserKyc;
@@ -40,14 +40,14 @@ public class AdminStaffKycService {
     }
 
     @Transactional(readOnly = true)
-    public AdminUserKycDto get(UUID staffId) {
+    public AdminUserKycResponse get(UUID staffId) {
         requireStaffExists(staffId);
         return kycs.findByAdminUserId(staffId).map(this::toResponseDto)
-                .orElse(new AdminUserKycDto(null, null, null, null, null));
+                .orElse(new AdminUserKycResponse(null, null, null, null, null));
     }
 
     @Transactional
-    public AdminUserKycDto update(UUID staffId, UpdateKycRequest request, String ip, String userAgent) {
+    public AdminUserKycResponse update(UUID staffId, UpdateKycRequest request, String ip, String userAgent) {
         AdminUser admin = requireStaffExists(staffId);
         if (admin.isSuperAdmin()) {
             throw new BusinessRuleException("Super-admin accounts cannot be modified through this endpoint.");
@@ -64,9 +64,9 @@ public class AdminStaffKycService {
         return adminUsers.findById(staffId).orElseThrow(() -> new ResourceNotFoundException("Staff member not found"));
     }
 
-    private AdminUserKycDto toResponseDto(AdminUserKyc kyc) {
+    private AdminUserKycResponse toResponseDto(AdminUserKyc kyc) {
         boolean unmasked = permissionChecker.has("admin_staff.view_kyc");
-        return new AdminUserKycDto(
+        return new AdminUserKycResponse(
                 mask(kyc.getAadhaarNumber(), unmasked),
                 mask(kyc.getPanNumber(), unmasked),
                 mask(kyc.getUanNumber(), unmasked),

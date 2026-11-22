@@ -1,0 +1,13 @@
+/**
+ * Public API of the kyc module (Spring Modulith named interface "api"): other modules call
+ * {@code KycService} to submit a worker's KYC numbers or complete it from a live Aadhaar e-KYC
+ * verification, and keep only the UUIDs/DTOs it hands back. {@code KycServiceImpl} is package-private
+ * and remains inaccessible across module boundaries, the same shape as
+ * {@code document.application}/{@code notification.application}; {@code WorkerIntakeService} is public
+ * (only {@code kyc.api.admin}, within this same module, calls it today) - see its own Javadoc. The
+ * identity-number hasher this module uses for Aadhaar/PAN duplicate checks now lives at
+ * {@code shared.security.IdentityNumberHasher} - promoted out of this module once the {@code worker}
+ * module's own statutory-detail (UAN/ESIC) needed the identical, module-agnostic hashing logic too.
+ */
+@org.springframework.modulith.NamedInterface("api")
+package in.anytimework.atwbackend.kyc.application;

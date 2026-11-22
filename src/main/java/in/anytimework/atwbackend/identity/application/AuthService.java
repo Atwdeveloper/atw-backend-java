@@ -80,17 +80,15 @@ public class AuthService {
             audit.record(null, "LOGIN_FAILED", "Unknown identifier: " + usernameOrEmail, ip, userAgent);
             throw new UnauthorizedException("Invalid credentials");
         }
-        if (admin.isLocked(now)) {
-            audit.record(admin.getId(), "LOGIN_BLOCKED", "Account locked", ip, userAgent);
-            throw new UnauthorizedException("Account is temporarily locked. Please try again later.");
-        }
         if (!admin.isActive()) {
             audit.record(admin.getId(), "LOGIN_BLOCKED", "Account disabled", ip, userAgent);
             throw new UnauthorizedException("Account is disabled.");
         }
+        // No account-level lockout here by design: AuthRateLimitFilter's per-IP cap plus the
+        // mandatory OTP step below already bound password brute-forcing, without the DoS a global
+        // per-account lock allows (anyone who knows the email could otherwise keep the real admin
+        // locked out indefinitely by re-triggering it every time it expires).
         if (!passwordEncoder.matches(password, admin.getPasswordHash())) {
-            admin.registerFailedLogin(properties.maxFailedLogins(), properties.lockoutDuration(), now);
-            adminUsers.save(admin);
             audit.record(admin.getId(), "LOGIN_FAILED", "Invalid password", ip, userAgent);
             throw new UnauthorizedException("Invalid credentials");
         }

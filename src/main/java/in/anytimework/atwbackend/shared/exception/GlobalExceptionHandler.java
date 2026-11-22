@@ -11,6 +11,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.security.core.AuthenticationException;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Clock;
@@ -90,6 +92,12 @@ public class GlobalExceptionHandler {
                 "Invalid value for parameter '" + ex.getName() + "'", null);
     }
 
+    /** A multipart upload past the servlet container's own size ceiling -> 400, not 500. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
+        return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Uploaded file is too large", null);
+    }
+
     /** Wrong Content-Type on the request body (e.g. text/plain instead of application/json) -> 415. */
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex) {
@@ -108,6 +116,19 @@ public class GlobalExceptionHandler {
         log.warn("Data integrity violation (likely a duplicate/concurrent write): {}", ex.getMessage());
         return build(HttpStatus.CONFLICT, "CONFLICT",
                 "This conflicts with an existing record (e.g. a duplicate email, username, or name)", null);
+    }
+
+    /**
+     * A concurrent write changed the same row (detected via a {@code @Version} column) between this
+     * request's read and its write - a genuine, correctly-detected conflict, not a crash. Mapped to
+     * 409 (not 500) so the client knows the request is safe to retry against fresh state, the same
+     * reasoning as the {@link DataIntegrityViolationException} handler above.
+     */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLockingFailure(ObjectOptimisticLockingFailureException ex) {
+        log.warn("Optimistic locking conflict (concurrent update to the same record): {}", ex.getMessage());
+        return build(HttpStatus.CONFLICT, "CONFLICT",
+                "This record was changed by someone else just now - please refresh and try again", null);
     }
 
     /** No controller mapping matches the URL (typo'd path or unknown endpoint) -> 404. */

@@ -53,6 +53,23 @@ services:
       timeout: 5s
       retries: 10
 
+  # Real face-recognition microservice (see faceauth.infrastructure.PythonFaceAuthAdapter and project
+  # memory "python-face-auth-service-location") - its own opt-in profile since it needs the sibling
+  # atw-face-auth-service repo checked out at ../../face_auth_model/face-auth and is a heavier first
+  # build (downloads ONNX model weights during the image build). Start it with:
+  #   docker compose --profile face-auth up -d --build face-auth
+  # application-local.properties already points atw.face-auth.base-url at http://localhost:8000 -
+  # nothing else to configure for a native (non-containerized) app run against this container.
+  face-auth:
+    build:
+      context: ../../face_auth_model/face-auth
+    profiles: ["face-auth"]
+    restart: unless-stopped
+    environment:
+      ATWFACE_API_KEY: ${FACE_AUTH_API_KEY:-}
+    ports:
+      - "8000:8000"
+
   app:
     build: .
     profiles: ["full-stack"]
