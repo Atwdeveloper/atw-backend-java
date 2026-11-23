@@ -84,7 +84,7 @@ class StartupSecurityValidatorTest {
     void missingPiiKey_throws() {
         StartupSecurityValidator v = validator(new PiiEncryptionProperties(null), adminSecurity(false));
         assertThatThrownBy(() -> v.run(null)).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("PII_ENCRYPTION_KEY");
+                .hasMessageContaining("ADMIN_PII_ENCRYPTION_KEY");
     }
 
     @Test
