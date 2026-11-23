@@ -23,7 +23,7 @@ import java.util.UUID;
  * classpath:db/migration}'s SQL scanning).
  *
  * <p>Reads the same environment variables Spring's own property placeholders resolve
- * ({@code WORKER_PII_ENCRYPTION_KEY}/{@code PII_ENCRYPTION_KEY}) directly via {@link System#getenv},
+ * ({@code WORKER_PII_ENCRYPTION_KEY}/{@code ADMIN_PII_ENCRYPTION_KEY}) directly via {@link System#getenv},
  * since Flyway runs as part of the same application startup, in the same process, before this
  * migration would ever execute.</p>
  */
@@ -32,7 +32,7 @@ public class V30__decrypt_existing_addresses extends BaseJavaMigration {
     @Override
     public void migrate(Context context) throws Exception {
         decryptTable(context, "worker_address", "WORKER_PII_ENCRYPTION_KEY");
-        decryptTable(context, "admin_user_address", "PII_ENCRYPTION_KEY");
+        decryptTable(context, "admin_user_address", "ADMIN_PII_ENCRYPTION_KEY");
     }
 
     private void decryptTable(Context context, String table, String keyEnvVar) throws Exception {

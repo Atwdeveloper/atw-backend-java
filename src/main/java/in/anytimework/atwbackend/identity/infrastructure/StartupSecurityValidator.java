@@ -42,7 +42,7 @@ public class StartupSecurityValidator implements ApplicationRunner {
     private static final String KNOWN_LOCAL_JWT_SECRET =
             "dev-only-insecure-change-me-atw-backend-hs256-secret-key-0123456789";
     private static final String KNOWN_LOCAL_BOOTSTRAP_PASSWORD = "ChangeMe@12345";
-    private static final String KNOWN_LOCAL_PII_ENCRYPTION_KEY = "aMgtn19OYBxgsWujXQpe/YjMiaigx0E7r0DXa3kKrRQ=";
+    private static final String KNOWN_LOCAL_ADMIN_PII_ENCRYPTION_KEY = "aMgtn19OYBxgsWujXQpe/YjMiaigx0E7r0DXa3kKrRQ=";
     private static final String KNOWN_LOCAL_WORKER_PII_ENCRYPTION_KEY = "c8ZWWQX6uaMDrKhuKJU8cwyz80sraP4EdBWcKfHZ4WM=";
     private static final String KNOWN_LOCAL_COMPANY_PII_ENCRYPTION_KEY = "Kwb3C/mwniu9+FHglHDYdXObxrzBILTeSIncV96oCsQ=";
     private static final int MIN_SECRET_BYTES = 32; // HS256 requires a key >= 256 bits.
@@ -124,7 +124,7 @@ public class StartupSecurityValidator implements ApplicationRunner {
         }
 
         validatePiiEncryptionKey(piiEncryptionProperties.key(), "atw.security.pii-encryption.key",
-                "PII_ENCRYPTION_KEY", KNOWN_LOCAL_PII_ENCRYPTION_KEY, "staff KYC/bank data");
+                "ADMIN_PII_ENCRYPTION_KEY", KNOWN_LOCAL_ADMIN_PII_ENCRYPTION_KEY, "staff KYC/bank data");
         validatePiiEncryptionKey(workerPiiEncryptionProperties.key(), "atw.security.worker-pii-encryption.key",
                 "WORKER_PII_ENCRYPTION_KEY", KNOWN_LOCAL_WORKER_PII_ENCRYPTION_KEY, "worker KYC/bank data");
         validatePiiEncryptionKey(companyPiiEncryptionProperties.key(), "atw.security.company-pii-encryption.key",
