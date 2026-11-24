@@ -118,8 +118,9 @@ run from two sources and pushes it with one `az containerapp update --set-env-va
 | `REDIS_PASSWORD` | ✅ | *(access key)* | Cache access key |
 | `REDIS_SSL` | ✅ | `true` | Enable TLS (Azure requires it) |
 | `JWT_SECRET` | ✅ | *(secret, ≥32 bytes, unique per environment)* | HS256 signing key for admin access tokens. **There is no insecure fallback** — see §8. |
-| `PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment)* | AES-256-GCM key encrypting staff KYC numbers and bank account numbers at rest. **No insecure fallback, same as `JWT_SECRET`** — see §8. |
-| `WORKER_PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment, DIFFERENT from `PII_ENCRYPTION_KEY`)* | AES-256-GCM key encrypting **worker** KYC/bank/statutory numbers at rest — deliberately a separate key from the staff one above so a compromise of one key doesn't also expose the other dataset. Same no-insecure-fallback rule — added when the `worker` module shipped; missing from this table until now. |
+| `ADMIN_PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment)* | AES-256-GCM key encrypting staff/admin KYC numbers and bank account numbers at rest. **No insecure fallback, same as `JWT_SECRET`** — see §8. Renamed from `PII_ENCRYPTION_KEY` on 2026-11-23 for clarity alongside its siblings below. |
+| `WORKER_PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment, DIFFERENT from `ADMIN_PII_ENCRYPTION_KEY`)* | AES-256-GCM key encrypting **worker** KYC/bank/statutory numbers at rest — deliberately a separate key from the staff one above so a compromise of one key doesn't also expose the other dataset. Same no-insecure-fallback rule — added when the `worker` module shipped; missing from this table until now. |
+| `COMPANY_PII_ENCRYPTION_KEY` | ✅ | *(secret, base64, decodes to exactly 32 bytes, unique per environment, DIFFERENT from `ADMIN_PII_ENCRYPTION_KEY` and `WORKER_PII_ENCRYPTION_KEY`)* | AES-256-GCM key encrypting **company** GST/PAN numbers at rest — a third, independent key (bounds blast radius the same way the worker key does). Same no-insecure-fallback rule, enforced by `StartupSecurityValidator` since the `company` module shipped; missing from this table until now. |
 
 > ⚠️ **Do not set `SPRING_PROFILES_ACTIVE` to `local` (or include `local` in a comma-list) anywhere
 > outside a developer's own machine.** That profile layers in a publicly-committed dev JWT secret and
@@ -128,7 +129,7 @@ run from two sources and pushes it with one `az containerapp update --set-env-va
 > Leave `SPRING_PROFILES_ACTIVE` unset in Azure.
 >
 > The one deliberate exception is `dev` — a separate, narrower profile for a pre-SMTP dev/staging
-> slot. It does **not** relax `JWT_SECRET`/`PII_ENCRYPTION_KEY`/`ADMIN_BOOTSTRAP_PASSWORD` at all; it
+> slot. It does **not** relax `JWT_SECRET`/`ADMIN_PII_ENCRYPTION_KEY`/`ADMIN_BOOTSTRAP_PASSWORD` at all; it
 > only unlocks `ADMIN_FIXED_OTP` (see below). Never set `dev` on a production app.
 
 ### Required only for first boot (creating the first super-admin)
@@ -174,7 +175,7 @@ running Azure app, not just assumed, the same way the face-recognition table abo
 
 | Variable | Default | Example (Azure) | Meaning |
 |---|---|---|---|
-| `ATW_AADHAAR_KYC_PROVIDER` | `stub` | `sandbox` | No short alias like `FACE_AUTH_PROVIDER` exists for this one — it binds straight off the full `atw.aadhaar-kyc.provider` property path. `stub` (default) returns fake, fixed "verified" Aadhaar details for any OTP — never real UIDAI data. Set to `sandbox` for the real integration. |
+| `AADHAAR_KYC_PROVIDER` | `stub` | `sandbox` | Renamed from `ATW_AADHAAR_KYC_PROVIDER` on 2026-11-23 — now has a short alias just like `FACE_AUTH_PROVIDER`, instead of binding straight off the full `atw.aadhaar-kyc.provider` property path. `stub` (default) returns fake, fixed "verified" Aadhaar details for any OTP — never real UIDAI data. Set to `sandbox` for the real integration. |
 | `SANDBOX_KYC_BASE_URL` | `https://api.sandbox.co.in` | — | Only read once the provider above is `sandbox`. Already correct by default; only override if Sandbox.co.in ever assigns a different host. |
 | `SANDBOX_API_KEY` / `SANDBOX_API_SECRET` | *(empty)* | *(secret)* | Sandbox.co.in account credentials, exchanged for a bearer token via `/authenticate` on every call (no token caching, by design — see the adapter's Javadoc). **Shared with GST verification below** — the same two values, not two separate secrets. |
 | `SANDBOX_KYC_TIMEOUT` | `PT20S` | — | HTTP client timeout for both the `/authenticate` and OTP send/verify calls. |
@@ -183,7 +184,7 @@ running Azure app, not just assumed, the same way the face-recognition table abo
 
 | Variable | Default | Example (Azure) | Meaning |
 |---|---|---|---|
-| `ATW_BANK_VERIFICATION_PROVIDER` | `stub` | `sandbox` | `stub` (default) returns a fake "account exists" penny-drop result for any account/IFSC — never a real bank check. Set to `sandbox` for the real integration. |
+| `BANK_VERIFICATION_PROVIDER` | `stub` | `sandbox` | Renamed from `ATW_BANK_VERIFICATION_PROVIDER` on 2026-11-23, same reason as the Aadhaar one above. `stub` (default) returns a fake "account exists" penny-drop result for any account/IFSC — never a real bank check. Set to `sandbox` for the real integration. |
 | `SANDBOX_BANK_BASE_URL` | `https://api.sandbox.co.in` | — | Logically independent of the other two base URLs even though it happens to default to the same host. |
 | `SANDBOX_BANK_API_KEY` / `SANDBOX_BANK_API_SECRET` | *(empty)* | *(secret)* | **A separate Sandbox.co.in account/credential pair — do not reuse `SANDBOX_API_KEY`/`SANDBOX_API_SECRET` here.** This adapter's wire contract (endpoint path, field names) is a best-effort reading of Sandbox.co.in's public docs, not confirmed against a live instance and not ported from a working legacy reference (legacy used a different, dead vendor for this) — confirm against Sandbox's current docs before relying on it beyond a throwaway test call. |
 | `SANDBOX_BANK_TIMEOUT` | `PT20S` | — | |
@@ -192,19 +193,18 @@ running Azure app, not just assumed, the same way the face-recognition table abo
 
 | Variable | Default | Example (Azure) | Meaning |
 |---|---|---|---|
-| `ATW_GST_VERIFICATION_PROVIDER` | `stub` | `sandbox` | `stub` (default) returns a fake, fixed "active GSTIN" result for any GST number — never a real registry lookup. Set to `sandbox` for the real integration. |
+| `GST_VERIFICATION_PROVIDER` | `stub` | `sandbox` | Renamed from `ATW_GST_VERIFICATION_PROVIDER` on 2026-11-23, same reason as the Aadhaar one above. `stub` (default) returns a fake, fixed "active GSTIN" result for any GST number — never a real registry lookup. Set to `sandbox` for the real integration. |
 | `SANDBOX_GST_BASE_URL` | `https://api.sandbox.co.in` | — | |
 | `SANDBOX_API_KEY` / `SANDBOX_API_SECRET` | *(empty)* | *(secret)* | **The exact same two secrets as Aadhaar e-KYC's row above — not a separate credential.** GST verification is a second Sandbox.co.in product under the same already-wired account (confirmed against the legacy app's own PHP source), so nothing new needs adding to Key Vault here *if* those two secrets are already there — see the note below. |
 | `SANDBOX_GST_TIMEOUT` | `PT20S` | — | |
 
-> ⚠️ **This doc never told anyone to set any of the nine variables above, for any of the three
-> integrations, until today.** Unless a provider flag was set directly in the Container App's env
-> vars outside of anything this handover ever instructed, **production may currently be running the
-> fake stub for Aadhaar e-KYC and bank verification too — not just GST** — with every worker-intake
-> call "succeeding" and nobody having seen an error about it. Check `az containerapp show --name
-> <app> --resource-group <rg> --query "properties.template.containers[0].env"` (§4b) for
-> `ATW_AADHAAR_KYC_PROVIDER` / `ATW_BANK_VERIFICATION_PROVIDER` / `ATW_GST_VERIFICATION_PROVIDER`
-> before assuming any of the three is real today.
+> ⚠️ **Historical note:** this doc didn't mention any of the nine variables above, for any of the
+> three integrations, until 2026-11-23 — before that date, all three may have silently been running
+> the fake stub with no error anywhere to notice. Confirmed fixed and verified live in the dev
+> environment the same day (all three correctly set to `sandbox`). On any new environment, check
+> `az containerapp show --name <app> --resource-group <rg> --query
+> "properties.template.containers[0].env"` (§4b) for `AADHAAR_KYC_PROVIDER` / `BANK_VERIFICATION_PROVIDER`
+> / `GST_VERIFICATION_PROVIDER` before assuming any of the three is real.
 
 ### Optional (sensible defaults shown)
 
@@ -305,11 +305,11 @@ flag to App Configuration, secrets to Key Vault):
 # Plain values -> App Configuration, labeled "dev" -- the three provider flags (none of these
 # existed in this doc before; all three currently default to the stub if left unset)
 az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
-  --key backend-atw-aadhaar-kyc-provider --value sandbox
+  --key backend-aadhaar-kyc-provider --value sandbox
 az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
-  --key backend-atw-bank-verification-provider --value sandbox
+  --key backend-bank-verification-provider --value sandbox
 az appconfig kv set --endpoint <app_config_endpoint> --auth-mode login --label dev \
-  --key backend-atw-gst-verification-provider --value sandbox
+  --key backend-gst-verification-provider --value sandbox
 
 # Secrets -> Key Vault. Aadhaar e-KYC and GST verification deliberately share ONE Sandbox.co.in
 # credential pair -- set it once and both integrations read the same two secrets (GST needs no
@@ -434,15 +434,15 @@ dockerized Postgres/Redis/the app itself — see §9) and produces exactly the r
 
 ## 8. Security notes (read this before your first real deploy)
 
-- **No insecure fallback for `JWT_SECRET`, `PII_ENCRYPTION_KEY`, or `WORKER_PII_ENCRYPTION_KEY`.**
-  Startup has a dedicated check (`StartupSecurityValidator`) that refuses to boot — throws and exits
-  non-zero — if, outside the `local`/`test` Spring profiles: the JWT secret is missing, shorter than
-  32 bytes, or the publicly-committed local-dev literal; **either** PII key (staff or worker — same
-  four checks, run independently for each) is missing, not valid base64, doesn't decode to exactly 32
-  bytes, or is the publicly-committed local-dev literal; or `ADMIN_OTP_IN_RESPONSE` is left on. Same
-  check for `ADMIN_BOOTSTRAP_PASSWORD` when bootstrap is enabled. **A failed deploy here means a
-  missing/weak secret (or a test-only flag left on), not a bug** — fix the env var, don't work around
-  the check.
+- **No insecure fallback for `JWT_SECRET`, `ADMIN_PII_ENCRYPTION_KEY`, `WORKER_PII_ENCRYPTION_KEY`, or
+  `COMPANY_PII_ENCRYPTION_KEY`.** Startup has a dedicated check (`StartupSecurityValidator`) that
+  refuses to boot — throws and exits non-zero — if, outside the `local`/`test` Spring profiles: the
+  JWT secret is missing, shorter than 32 bytes, or the publicly-committed local-dev literal; **any**
+  of the three PII keys (staff, worker, or company — same four checks, run independently for each) is
+  missing, not valid base64, doesn't decode to exactly 32 bytes, or is the publicly-committed
+  local-dev literal; or `ADMIN_OTP_IN_RESPONSE` is left on. Same check for `ADMIN_BOOTSTRAP_PASSWORD`
+  when bootstrap is enabled. **A failed deploy here means a missing/weak secret (or a test-only flag
+  left on), not a bug** — fix the env var, don't work around the check.
 - **`ADMIN_FIXED_OTP` is gated the same strict way, plus a profile check.** It's refused at startup
   if set under any profile other than `dev` (a static, config-known OTP is a standing 2FA bypass for
   every admin — see §3), and refused if it isn't exactly `ADMIN_OTP_LENGTH` numeric digits. When it
