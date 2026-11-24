@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.document.infrastructure;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.StringUtils;
@@ -17,13 +18,17 @@ import org.springframework.util.StringUtils;
 public class AzureStorageConfig {
 
     @Bean
-    public BlobServiceClient blobServiceClient(StorageProperties properties) {
+    public BlobServiceClient blobServiceClient(StorageProperties properties,
+            @Value("${atw.azure.managed-identity-client-id:}") String managedIdentityClientId) {
         BlobServiceClientBuilder builder = new BlobServiceClientBuilder();
         if (StringUtils.hasText(properties.connectionString())) {
             builder.connectionString(properties.connectionString());
         } else {
-            builder.endpoint(properties.endpoint())
-                    .credential(new DefaultAzureCredentialBuilder().build());
+            DefaultAzureCredentialBuilder credentialBuilder = new DefaultAzureCredentialBuilder();
+            if (StringUtils.hasText(managedIdentityClientId)) {
+                credentialBuilder.managedIdentityClientId(managedIdentityClientId);
+            }
+            builder.endpoint(properties.endpoint()).credential(credentialBuilder.build());
         }
         return builder.buildClient();
     }
