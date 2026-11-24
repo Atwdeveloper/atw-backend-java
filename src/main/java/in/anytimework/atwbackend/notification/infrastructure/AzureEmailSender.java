@@ -7,6 +7,7 @@ import com.azure.identity.DefaultAzureCredentialBuilder;
 import in.anytimework.atwbackend.notification.application.EmailMessage;
 import in.anytimework.atwbackend.notification.application.EmailSender;
 import in.anytimework.atwbackend.notification.application.MailProperties;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -23,14 +24,18 @@ public class AzureEmailSender implements EmailSender {
     private final EmailClient client;
     private final String fromAddress;
 
-    public AzureEmailSender(MailProperties properties) {
+    public AzureEmailSender(MailProperties properties,
+            @Value("${atw.azure.managed-identity-client-id:}") String managedIdentityClientId) {
         this.fromAddress = properties.fromAddress();
         EmailClientBuilder builder = new EmailClientBuilder();
         if (StringUtils.hasText(properties.azureConnectionString())) {
             builder.connectionString(properties.azureConnectionString());
         } else {
-            builder.endpoint(properties.azureEndpoint())
-                    .credential(new DefaultAzureCredentialBuilder().build());
+            DefaultAzureCredentialBuilder credentialBuilder = new DefaultAzureCredentialBuilder();
+            if (StringUtils.hasText(managedIdentityClientId)) {
+                credentialBuilder.managedIdentityClientId(managedIdentityClientId);
+            }
+            builder.endpoint(properties.azureEndpoint()).credential(credentialBuilder.build());
         }
         this.client = builder.buildClient();
     }
