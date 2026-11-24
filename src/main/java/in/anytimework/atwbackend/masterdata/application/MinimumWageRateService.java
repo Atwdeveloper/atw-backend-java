@@ -1,7 +1,10 @@
 package in.anytimework.atwbackend.masterdata.application;
 
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateMinimumWageRateRequest;
+import in.anytimework.atwbackend.masterdata.api.admin.dto.MinimumWageRateFilterOptionsResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.MinimumWageRateResponse;
+import in.anytimework.atwbackend.masterdata.application.lookup.SkillCategorySummary;
+import in.anytimework.atwbackend.masterdata.application.lookup.StateSummary;
 import in.anytimework.atwbackend.masterdata.domain.MinimumWageRate;
 import in.anytimework.atwbackend.masterdata.domain.MinimumWageRateRepository;
 import in.anytimework.atwbackend.masterdata.domain.SkillCategory;
@@ -15,8 +18,10 @@ import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.kernel.ActiveStatus;
+import in.anytimework.atwbackend.shared.persistence.DistinctColumnValues;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
+import jakarta.persistence.EntityManager;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -49,16 +54,21 @@ public class MinimumWageRateService {
     /** Real, directly queryable scalar columns only - see {@link SortValidation}'s Javadoc for why (notably excludes the raw stateId/skillCategoryId UUIDs - already filterable via multiselect). */
     private static final Set<String> ALLOWED_SORT = Set.of("effectiveFrom", "minDailyRate", "status", "createdAt");
 
+    /** Same as {@link #ALLOWED_SORT} minus "status" - every row {@link #listCurrent} returns is ACTIVE by construction, so sorting by it would be meaningless. */
+    private static final Set<String> ALLOWED_SORT_CURRENT = Set.of("effectiveFrom", "minDailyRate", "createdAt");
+
     private final MinimumWageRateRepository rates;
     private final StateRepository states;
     private final SkillCategoryRepository skillCategories;
+    private final EntityManager entityManager;
     private final Clock clock;
 
     MinimumWageRateService(MinimumWageRateRepository rates, StateRepository states,
-                            SkillCategoryRepository skillCategories, Clock clock) {
+                            SkillCategoryRepository skillCategories, EntityManager entityManager, Clock clock) {
         this.rates = rates;
         this.states = states;
         this.skillCategories = skillCategories;
+        this.entityManager = entityManager;
         this.clock = clock;
     }
 
@@ -88,6 +98,59 @@ public class MinimumWageRateService {
         Map<UUID, String> categoryNames = nameOf(skillCategories,
                 page.getContent().stream().map(MinimumWageRate::getSkillCategoryId).distinct().toList());
         return PageResponse.from(page.map(r -> toDto(r, stateNames, categoryNames)));
+    }
+
+    /**
+     * The main admin "Minimum Wage" screen's listing: exactly one row per (state, skill category)
+     * pair - whichever version is currently in force as of {@code asOf} (defaults to today) - rather
+     * than every historical version ({@link #list}, which is unchanged and now serves as the
+     * per-pair drill-down/history view instead). Uses the IDENTICAL effective-rate rule as
+     * {@link #resolveEffective} (latest ACTIVE row with {@code effectiveFrom <= asOf}), just resolved
+     * for every pair at once via {@link MinimumWageRateRepository#findCurrentRateIds} instead of one
+     * pair at a time - never a second, slightly different definition of "current". No {@code statuses}
+     * filter here (every row is ACTIVE by construction) and {@code status} is not a sortable field
+     * for the same reason - see {@link #ALLOWED_SORT_CURRENT}.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<MinimumWageRateResponse> listCurrent(MinimumWageRateSearchCriteria criteria, LocalDate asOf, Pageable pageable) {
+        SortValidation.assertSortable(pageable, ALLOWED_SORT_CURRENT);
+        LocalDate effectiveAsOf = asOf != null ? asOf : LocalDate.now(clock);
+        List<UUID> currentIds = rates.findCurrentRateIds(effectiveAsOf);
+        if (currentIds.isEmpty()) {
+            return PageResponse.from(Page.empty(pageable));
+        }
+        List<Specification<MinimumWageRate>> predicates = new ArrayList<>();
+        predicates.add(MinimumWageRateSpecifications.hasIds(Set.copyOf(currentIds)));
+        if (criteria.stateIds() != null && !criteria.stateIds().isEmpty()) {
+            predicates.add(MinimumWageRateSpecifications.hasStateIds(criteria.stateIds()));
+        }
+        if (criteria.skillCategoryIds() != null && !criteria.skillCategoryIds().isEmpty()) {
+            predicates.add(MinimumWageRateSpecifications.hasSkillCategoryIds(criteria.skillCategoryIds()));
+        }
+        Page<MinimumWageRate> page = rates.findAll(Specifications.allOf(predicates), pageable);
+        Map<UUID, String> stateNames = nameOf(states, page.getContent().stream().map(MinimumWageRate::getStateId).distinct().toList());
+        Map<UUID, String> categoryNames = nameOf(skillCategories,
+                page.getContent().stream().map(MinimumWageRate::getSkillCategoryId).distinct().toList());
+        return PageResponse.from(page.map(r -> toDto(r, stateNames, categoryNames)));
+    }
+
+    /**
+     * Scoped filter-dropdown options for this listing - only the states/skill categories actually
+     * referenced by at least one rate row today, not every masterdata state/skill-category. Every row
+     * here is a real row (no soft-delete/satellite-table complication, unlike worker's equivalent), so
+     * a plain distinct-values query needs no extra guard predicate.
+     */
+    @Transactional(readOnly = true)
+    public MinimumWageRateFilterOptionsResponse filterOptions() {
+        Set<UUID> stateIds = Set.copyOf(DistinctColumnValues.of(entityManager, MinimumWageRate.class, "stateId", UUID.class));
+        Set<UUID> categoryIds = Set.copyOf(DistinctColumnValues.of(entityManager, MinimumWageRate.class, "skillCategoryId", UUID.class));
+        List<StateSummary> resolvedStates = states.findAllById(stateIds).stream()
+                .map(s -> new StateSummary(s.getId(), s.getName(), s.getCode()))
+                .toList();
+        List<SkillCategorySummary> resolvedCategories = skillCategories.findAllById(categoryIds).stream()
+                .map(c -> new SkillCategorySummary(c.getId(), c.getName(), c.getCode()))
+                .toList();
+        return new MinimumWageRateFilterOptionsResponse(resolvedStates, resolvedCategories);
     }
 
     @Transactional(readOnly = true)

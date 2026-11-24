@@ -23,4 +23,9 @@ final class MinimumWageRateSpecifications {
     static Specification<MinimumWageRate> hasStatuses(Set<ActiveStatus> statuses) {
         return (root, query, cb) -> root.get("status").in(statuses);
     }
+
+    /** Restricts to a specific, already-resolved id set - e.g. the current-per-pair ids from {@link in.anytimework.atwbackend.masterdata.domain.MinimumWageRateRepository#findCurrentRateIds}. */
+    static Specification<MinimumWageRate> hasIds(Set<UUID> ids) {
+        return (root, query, cb) -> root.get("id").in(ids);
+    }
 }

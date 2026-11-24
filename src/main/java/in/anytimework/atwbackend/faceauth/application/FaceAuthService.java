@@ -40,6 +40,16 @@ public interface FaceAuthService {
     Map<UUID, Instant> getEnrollmentDates(Set<UUID> workerIds);
 
     /**
+     * Every worker id with an enrollment row on file - regardless of
+     * {@link #excludeFromMatching}'s exclusion flag (that answers a different question: "still an
+     * eligible identify/duplicate-check candidate", not "has a row at all"). Backs the admin worker
+     * list's {@code faceEnrolled} filter, the same "ask the owning module for an id-set, then filter
+     * by it" technique {@code worker.application.KycService.findWorkerIdsByStatus} already established
+     * for the {@code kycStatus} filter - never a cross-module JPA join.
+     */
+    Set<UUID> findEnrolledWorkerIds();
+
+    /**
      * Enrolls (or fully re-enrolls, overwriting any existing template) a worker's face. Requires
      * explicit consent. Rejects the photo outright (throws, nothing persisted) if the face-auth
      * service itself flags it as poor quality or fails its liveness check - ATW never stores a

@@ -10,7 +10,6 @@ public record UpdateWorkerBankDetailRequest(
         @Schema(example = "Ramesh Kumar Sharma") @Size(max = 150) String accountHolderName,
         @Schema(example = "State Bank of India") @Size(max = 150) String bankName,
         @Schema(description = "Stored encrypted at rest.", example = "33412345678") @Size(max = 50) String accountNumber,
-        @Schema(example = "SBIN0001234") @Size(max = 15) String ifscCode,
-        @Schema(example = "Jaipur Civil Lines Branch") @Size(max = 150) String branchName
+        @Schema(example = "SBIN0001234") @Size(max = 15) String ifscCode
 ) {
 }

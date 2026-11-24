@@ -36,10 +36,6 @@ final class WorkerSpecifications {
         return (root, query, cb) -> root.get("status").in(statuses);
     }
 
-    static Specification<Worker> hasDepartment(Set<UUID> departmentIds) {
-        return (root, query, cb) -> root.get("departmentId").in(departmentIds);
-    }
-
     static Specification<Worker> hasIndustry(Set<UUID> industryIds) {
         return (root, query, cb) -> root.get("industryId").in(industryIds);
     }
@@ -66,6 +62,16 @@ final class WorkerSpecifications {
     /** Already-resolved worker ids (e.g. from a cross-module KYC-status lookup) - never queried via a JPA join across module boundaries. */
     static Specification<Worker> idIn(Set<UUID> ids) {
         return (root, query, cb) -> root.get("id").in(ids);
+    }
+
+    /**
+     * Negation of {@link #idIn} (e.g. "not face-enrolled"). Callers must never invoke this with an
+     * empty {@code ids} set and expect it to mean "matches everyone" - {@code Path.in(emptyCollection)}
+     * is the same invalid-SQL hazard {@link #idIn} already has to be guarded against by its own
+     * callers; when {@code ids} is empty, skip adding this predicate at all instead.
+     */
+    static Specification<Worker> idNotIn(Set<UUID> ids) {
+        return (root, query, cb) -> cb.not(root.get("id").in(ids));
     }
 
     /**

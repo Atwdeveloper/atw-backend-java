@@ -7,8 +7,6 @@ import in.anytimework.atwbackend.kyc.application.KycService;
 import in.anytimework.atwbackend.kyc.application.KycStatus;
 import in.anytimework.atwbackend.kyc.application.KycVerificationCompletionResult;
 import in.anytimework.atwbackend.masterdata.application.lookup.CitySummary;
-import in.anytimework.atwbackend.masterdata.application.lookup.DepartmentLookupService;
-import in.anytimework.atwbackend.masterdata.application.lookup.DepartmentSummary;
 import in.anytimework.atwbackend.masterdata.application.lookup.DesignationLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.DesignationSummary;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
@@ -27,7 +25,6 @@ import in.anytimework.atwbackend.shared.export.ExcelWriter;
 import in.anytimework.atwbackend.shared.kernel.Address;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
-import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerDesignationsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerSkillsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
@@ -93,7 +90,7 @@ public class WorkerService {
     private static final Set<WorkerStatus> NOT_DIRECTLY_SETTABLE =
             EnumSet.of(WorkerStatus.REGISTERED, WorkerStatus.KYC_PENDING);
     private static final List<String> EXPORT_HEADER = List.of(
-            "Worker Code", "First Name", "Last Name", "Mobile Number", "Status", "KYC Status", "Designation", "Department",
+            "Worker Code", "First Name", "Last Name", "Mobile Number", "Status", "KYC Status", "Designation",
             "Current City", "Current State", "Permanent City", "Permanent State", "Face Enrolled"
     );
     /**
@@ -111,7 +108,6 @@ public class WorkerService {
     private final WorkerSkillRepository workerSkills;
     private final WorkerStatusHistoryRepository statusHistory;
     private final WorkerAddressRepository workerAddresses;
-    private final DepartmentLookupService departmentLookup;
     private final IndustryLookupService industryLookup;
     private final DesignationLookupService designationLookup;
     private final SkillLookupService skillLookup;
@@ -120,22 +116,20 @@ public class WorkerService {
     private final FaceAuthService faceAuthService;
     private final DocumentService documentService;
     private final WorkerProfilePhotoSupport photoSupport;
-    private final CurrentAdmin currentAdmin;
     private final Clock clock;
 
     public WorkerService(WorkerRepository workers, WorkerDesignationRepository workerDesignations,
                          WorkerSkillRepository workerSkills, WorkerStatusHistoryRepository statusHistory,
-                         WorkerAddressRepository workerAddresses, DepartmentLookupService departmentLookup,
+                         WorkerAddressRepository workerAddresses,
                          IndustryLookupService industryLookup, DesignationLookupService designationLookup,
                          SkillLookupService skillLookup, GeographyLookupService geography, KycService kycService,
                          FaceAuthService faceAuthService, DocumentService documentService,
-                         WorkerProfilePhotoSupport photoSupport, CurrentAdmin currentAdmin, Clock clock) {
+                         WorkerProfilePhotoSupport photoSupport, Clock clock) {
         this.workers = workers;
         this.workerDesignations = workerDesignations;
         this.workerSkills = workerSkills;
         this.statusHistory = statusHistory;
         this.workerAddresses = workerAddresses;
-        this.departmentLookup = departmentLookup;
         this.industryLookup = industryLookup;
         this.designationLookup = designationLookup;
         this.skillLookup = skillLookup;
@@ -144,7 +138,6 @@ public class WorkerService {
         this.faceAuthService = faceAuthService;
         this.documentService = documentService;
         this.photoSupport = photoSupport;
-        this.currentAdmin = currentAdmin;
         this.clock = clock;
     }
 
@@ -194,9 +187,6 @@ public class WorkerService {
         if (criteria.status() != null && !criteria.status().isEmpty()) {
             predicates.add(WorkerSpecifications.hasStatus(criteria.status()));
         }
-        if (criteria.departmentId() != null && !criteria.departmentId().isEmpty()) {
-            predicates.add(WorkerSpecifications.hasDepartment(criteria.departmentId()));
-        }
         if (criteria.industryId() != null && !criteria.industryId().isEmpty()) {
             predicates.add(WorkerSpecifications.hasIndustry(criteria.industryId()));
         }
@@ -225,6 +215,23 @@ public class WorkerService {
             }
             predicates.add(WorkerSpecifications.idIn(matchingWorkerIds));
         }
+        if (criteria.faceEnrolled() != null) {
+            Set<UUID> enrolledWorkerIds = faceAuthService.findEnrolledWorkerIds();
+            if (criteria.faceEnrolled()) {
+                if (enrolledWorkerIds.isEmpty()) {
+                    // Nobody is enrolled at all - no possible match, same short-circuit as an empty
+                    // kycStatus id set above (an empty SQL IN () is invalid, so this is handled as its
+                    // own case rather than ever building that predicate).
+                    return Optional.empty();
+                }
+                predicates.add(WorkerSpecifications.idIn(enrolledWorkerIds));
+            } else if (!enrolledWorkerIds.isEmpty()) {
+                predicates.add(WorkerSpecifications.idNotIn(enrolledWorkerIds));
+            }
+            // else: faceEnrolled == false and nobody is enrolled yet - every worker already qualifies
+            // as "not enrolled", so no predicate is added (correct, not a bug - see idNotIn's Javadoc
+            // on why this must never be called with an empty id set either).
+        }
         return Optional.of(predicates);
     }
 
@@ -232,9 +239,6 @@ public class WorkerService {
     public WorkerResponse create(CreateWorkerRequest request) {
         if (workers.existsByMobileNumber(request.mobileNumber())) {
             throw new ConflictException("A worker with this mobile number already exists.");
-        }
-        if (request.departmentId() != null && !departmentLookup.exists(request.departmentId())) {
-            throw new ValidationException("Unknown department id.");
         }
         if (request.industryId() != null && !industryLookup.exists(request.industryId())) {
             throw new ValidationException("Unknown industry id.");
@@ -244,7 +248,7 @@ public class WorkerService {
 
         Worker worker = new Worker(generateWorkerCode(), request.firstName(), request.middleName(), request.lastName(),
                 request.fatherName(), request.gender(), request.dateOfBirth(), request.mobileNumber(),
-                request.personalEmail(), request.departmentId(), request.industryId(), request.workExperienceYears());
+                request.personalEmail(), request.industryId(), request.workExperienceYears());
         worker = workers.save(worker);
 
         saveDesignations(worker.getId(), request.designationIds(), request.primaryDesignationId());
@@ -274,15 +278,12 @@ public class WorkerService {
                 && workers.existsByMobileNumberAndIdNot(request.mobileNumber(), id)) {
             throw new ConflictException("A worker with this mobile number already exists.");
         }
-        if (request.departmentId() != null && !departmentLookup.exists(request.departmentId())) {
-            throw new ValidationException("Unknown department id.");
-        }
         if (request.industryId() != null && !industryLookup.exists(request.industryId())) {
             throw new ValidationException("Unknown industry id.");
         }
         worker.updateProfile(request.firstName(), request.middleName(), request.lastName(), request.fatherName(),
                 request.gender(), request.dateOfBirth(), request.mobileNumber(), request.personalEmail(),
-                request.departmentId(), request.industryId(), request.workExperienceYears());
+                request.industryId(), request.workExperienceYears());
         workers.save(worker);
         return toResponse(worker);
     }
@@ -330,10 +331,8 @@ public class WorkerService {
      *   <li>REGISTERED/KYC_PENDING are reached only automatically - never a valid target here.</li>
      *   <li>No-op transitions (newStatus == current status) are rejected rather than silently accepted.</li>
      *   <li>A reason is required for SUSPENDED/BLACKLISTED/INACTIVE.</li>
-     *   <li>Entering OR leaving BLACKLISTED requires a super-admin - un-blacklisting is exactly as
-     *       high-privilege as blacklisting, not a one-way gate (a real gap an earlier version of this
-     *       method had: any holder of workers.toggle_status could silently reverse a super-admin's
-     *       blacklist decision just by requesting ACTIVE).</li>
+     *   <li>Entering OR leaving BLACKLISTED needs nothing beyond the ordinary workers.toggle_status
+     *       permission every other transition here already requires - not a separately-gated action.</li>
      *   <li>ACTIVE is not reachable directly from REGISTERED/KYC_PENDING via this admin endpoint - a
      *       worker must complete KYC (see {@link #activateAfterKycVerified}, which calls the private
      *       {@link #changeStatus} helper directly and is therefore unaffected by this restriction).</li>
@@ -351,10 +350,6 @@ public class WorkerService {
         }
         if (REASON_REQUIRED_STATUSES.contains(newStatus) && !StringUtils.hasText(reason)) {
             throw new ValidationException("A reason is required when setting status to " + newStatus + ".");
-        }
-        boolean touchesBlacklist = newStatus == WorkerStatus.BLACKLISTED || oldStatus == WorkerStatus.BLACKLISTED;
-        if (touchesBlacklist && !currentAdmin.isSuperAdmin()) {
-            throw new BusinessRuleException("Only a super-admin can blacklist a worker or reverse a blacklist.");
         }
         if (newStatus == WorkerStatus.ACTIVE && NOT_DIRECTLY_SETTABLE.contains(oldStatus)) {
             throw new BusinessRuleException(
@@ -502,7 +497,6 @@ public class WorkerService {
         Set<UUID> workerIds = workerList.stream().map(Worker::getId).collect(Collectors.toSet());
         Map<UUID, UUID> primaryDesignationIdByWorker = primaryDesignationIdByWorker(workerIds);
         Map<UUID, String> designationNameById = designationNameById();
-        Map<UUID, String> departmentNameById = departmentNameById();
         Map<UUID, KycStatus> kycStatusByWorker = kycService.getStatuses(workerIds);
         Map<UUID, Instant> faceEnrolledAtByWorker = faceAuthService.getEnrollmentDates(workerIds);
         WorkerAddressNames addressNames = addressNamesByWorker(workerIds);
@@ -511,11 +505,10 @@ public class WorkerService {
         for (Worker w : workerList) {
             UUID primaryDesignationId = primaryDesignationIdByWorker.get(w.getId());
             String designationName = primaryDesignationId == null ? null : designationNameById.get(primaryDesignationId);
-            String departmentName = departmentNameById.get(w.getDepartmentId());
             KycStatus kycStatus = kycStatusByWorker.getOrDefault(w.getId(), KycStatus.NOT_STARTED);
             boolean faceEnrolled = faceEnrolledAtByWorker.containsKey(w.getId());
             rows.add(Arrays.<Object>asList(w.getWorkerCode(), w.getFirstName(), w.getLastName(), w.getMobileNumber(),
-                    w.getStatus().name(), kycStatus.name(), designationName, departmentName,
+                    w.getStatus().name(), kycStatus.name(), designationName,
                     addressNames.currentCity().get(w.getId()), addressNames.currentState().get(w.getId()),
                     addressNames.permanentCity().get(w.getId()), addressNames.permanentState().get(w.getId()),
                     faceEnrolled ? "Yes" : "No"));
@@ -744,11 +737,6 @@ public class WorkerService {
         return designationLookup.list().stream().collect(Collectors.toMap(DesignationSummary::id, DesignationSummary::name));
     }
 
-    /** Batch-loaded (the full, small masterdata list, never per row) - department id -> its display name. */
-    private Map<UUID, String> departmentNameById() {
-        return departmentLookup.list().stream().collect(Collectors.toMap(DepartmentSummary::id, DepartmentSummary::name));
-    }
-
     private WorkerResponse toResponse(Worker worker) {
         List<WorkerDesignationRef> designationRefs = workerDesignations.findByWorkerId(worker.getId()).stream()
                 .map(wd -> new WorkerDesignationRef(wd.getDesignationId(), designationLookup.get(wd.getDesignationId()).name(), wd.isPrimary()))
@@ -767,7 +755,7 @@ public class WorkerService {
 
         return new WorkerResponse(worker.getId(), worker.getWorkerCode(), worker.getFirstName(), worker.getMiddleName(),
                 worker.getLastName(), worker.getFatherName(), worker.getGender(), worker.getDateOfBirth(),
-                worker.getMobileNumber(), worker.getPersonalEmail(), worker.getDepartmentId(), worker.getIndustryId(),
+                worker.getMobileNumber(), worker.getPersonalEmail(), worker.getIndustryId(),
                 worker.getWorkExperienceYears(), worker.getStatus(),
                 worker.getStatusReason(), photoUrl, designationRefs, skillRefs, kycStatus, faceEnrollment,
                 currentAddress, permanentAddress, worker.getCreatedAt());

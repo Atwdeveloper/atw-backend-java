@@ -6,13 +6,10 @@ import in.anytimework.atwbackend.kyc.application.KycStatus;
 import in.anytimework.atwbackend.kyc.application.WorkerIntakeService;
 import in.anytimework.atwbackend.kyc.application.dto.AadhaarOtpChallengeDto;
 import in.anytimework.atwbackend.kyc.application.dto.AadhaarVerificationResultDto;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.DepartmentResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
-import in.anytimework.atwbackend.masterdata.application.DepartmentService;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.shared.api.PageResponse;
@@ -59,13 +56,11 @@ class WorkerKycVerificationFlowIntegrationTest {
     @Autowired
     private WorkerIntakeService intakeService;
     @Autowired
-    private DepartmentService departmentService;
-    @Autowired
     private IndustryService industryService;
     @Autowired
     private DesignationService designationService;
 
-    private record TestMasterData(UUID departmentId, UUID designationId) {
+    private record TestMasterData(UUID designationId) {
     }
 
     private static String unique() {
@@ -91,11 +86,10 @@ class WorkerKycVerificationFlowIntegrationTest {
     }
 
     private TestMasterData setupMasterData() {
-        DepartmentResponse department = departmentService.create(new CreateDepartmentRequest("Dept " + unique()));
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
         DesignationResponse designation = designationService.create(
-                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
-        return new TestMasterData(department.id(), designation.id());
+                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), industry.id(), null));
+        return new TestMasterData(designation.id());
     }
 
     /** Drives the full Aadhaar e-KYC wizard (send OTP, verify with the stub's fixed dev OTP). */
@@ -111,7 +105,7 @@ class WorkerKycVerificationFlowIntegrationTest {
         UUID verificationId = verifyAadhaarViaStub();
 
         WorkerResponse worker = workerService.create(new CreateWorkerRequest("Flow", null, "Test " + unique(), null,
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
+                Gender.MALE, null, uniqueMobile(), null, null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of(), verificationId));
 
         assertThat(kycService.getStatus(worker.id())).isEqualTo(KycStatus.VERIFIED);
@@ -134,7 +128,7 @@ class WorkerKycVerificationFlowIntegrationTest {
     void verifiedKycDoesNotReactivateAWorkerTheAdminHasSuspended() {
         TestMasterData md = setupMasterData();
         WorkerResponse worker = workerService.create(new CreateWorkerRequest("Flow", null, "Test " + unique(), null,
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
+                Gender.MALE, null, uniqueMobile(), null, null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of()));
 
         workerService.updateStatus(worker.id(), WorkerStatus.SUSPENDED, "Pending investigation");

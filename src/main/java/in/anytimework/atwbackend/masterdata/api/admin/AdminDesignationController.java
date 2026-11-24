@@ -82,7 +82,7 @@ public class AdminDesignationController {
                                     "name": "Mason",
                                     "status": "ACTIVE",
                                     "imageUrl": null,
-                                    "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ],
+                                    "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ],
                                     "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a",
                                     "skillCategoryName": "Skilled"
                                   }
@@ -120,7 +120,7 @@ public class AdminDesignationController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Designation found",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown designation id",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "RESOURCE_NOT_FOUND", "message": "Designation not found", "fieldErrors": null, "timestamp": "2026-11-01T10:10:00Z", "traceId": "d4e5f6071829303a" } }""")))
@@ -136,15 +136,16 @@ public class AdminDesignationController {
 
             Validation, checked in this order: `name` required/non-blank/max 150 chars; `industryIds` required \
             and must contain at least one id (an empty array is rejected, not treated as "no industries yet"); \
-            every id in `industryIds` must reference an existing industry; `skillCategoryId` is optional \
-            (`null` is fine) but if provided must reference an existing skill category.
+            `primaryIndustryId` required and must be a member of `industryIds`; every id in `industryIds` must \
+            reference an existing industry; `skillCategoryId` is optional (`null` is fine) but if provided must \
+            reference an existing skill category.
 
             Business rule: a designation with this exact `name` must not already exist (global uniqueness, \
             same as Department/Industry/Skill Category).""")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Designation created",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "`industryIds` was empty, or referenced an unknown industry/skill-category id",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "VALIDATION_ERROR", "message": "At least one industry must be selected.", "fieldErrors": null, "timestamp": "2026-11-01T10:10:00Z", "traceId": "d4e5f6071829303a" } }"""))),
@@ -162,13 +163,15 @@ public class AdminDesignationController {
             Permission: `designation.edit`.
 
             A full replace of `industryIds` (same "at least one, all must exist" validation as Create) plus \
-            `name`. There is no `skillCategoryId` field in this body on purpose - see this tag's description; \
+            `name` - `primaryIndustryId` is required here too, even when neither the industry set nor the \
+            previous primary are changing; there is no implicit carry-forward of whatever was primary before. \
+            There is no `skillCategoryId` field in this body on purpose - see this tag's description; \
             whatever is currently assigned is left completely untouched no matter what you send here. Use \
             Assign/Clear Skill Category below to change it.""")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Designation updated (skillCategoryId carried over unchanged)",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown designation id",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "RESOURCE_NOT_FOUND", "message": "Designation not found", "fieldErrors": null, "timestamp": "2026-11-01T10:10:00Z", "traceId": "d4e5f6071829303a" } }""")))
@@ -186,7 +189,7 @@ public class AdminDesignationController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Status updated",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown designation id",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "RESOURCE_NOT_FOUND", "message": "Designation not found", "fieldErrors": null, "timestamp": "2026-11-01T10:10:00Z", "traceId": "d4e5f6071829303a" } }""")))
@@ -266,7 +269,7 @@ public class AdminDesignationController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Icon stored",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": "https://atwstorage.blob.core.windows.net/documents/designation-icon/3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b.png?sv=2025-05-05&se=2026-11-01T10%3A30%3A00Z&sr=b&sp=r&sig=REDACTED", "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": "https://atwstorage.blob.core.windows.net/documents/designation-icon/3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b.png?sv=2025-05-05&se=2026-11-01T10%3A30%3A00Z&sr=b&sp=r&sig=REDACTED", "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "File content does not match the declared content type (or is empty/too large/unsupported)",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "VALIDATION_ERROR", "message": "File content does not match declared content type image/png", "fieldErrors": null, "timestamp": "2026-11-01T10:06:00Z", "traceId": "c3d4e5f607182930" } }""")))
@@ -285,7 +288,7 @@ public class AdminDesignationController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Icon cleared",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown designation id",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "RESOURCE_NOT_FOUND", "message": "Designation not found", "fieldErrors": null, "timestamp": "2026-11-01T10:10:00Z", "traceId": "d4e5f6071829303a" } }""")))
@@ -307,7 +310,7 @@ public class AdminDesignationController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Skill category assigned",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "skillCategoryName": "Skilled" }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "`skillCategoryId` does not exist",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "VALIDATION_ERROR", "message": "Unknown skill category.", "fieldErrors": null, "timestamp": "2026-11-01T10:11:00Z", "traceId": "f60718293a4b5c6d" } }"""))),
@@ -329,7 +332,7 @@ public class AdminDesignationController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Skill category cleared",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = DesignationResponse.class), examples = @ExampleObject(value = """
-                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
+                            { "success": true, "data": { "id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b", "name": "Mason (Skilled)", "status": "ACTIVE", "imageUrl": null, "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001", "primary": true } ], "skillCategoryId": null, "skillCategoryName": null }, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown designation id",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
                             { "success": false, "data": null, "error": { "code": "RESOURCE_NOT_FOUND", "message": "Designation not found", "fieldErrors": null, "timestamp": "2026-11-01T10:10:00Z", "traceId": "d4e5f6071829303a" } }""")))

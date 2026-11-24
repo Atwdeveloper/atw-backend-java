@@ -47,7 +47,7 @@ class WorkerBankDetailServiceTest {
 
     private WorkerBankDetail existingDetail(String accountHolderName) {
         WorkerBankDetail detail = new WorkerBankDetail(workerId);
-        detail.update(accountHolderName, "SBI", "31234567890", "SBIN0001234", "Main Branch");
+        detail.update(accountHolderName, "SBI", "31234567890", "SBIN0001234");
         return detail;
     }
 

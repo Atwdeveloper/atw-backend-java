@@ -16,11 +16,12 @@ import java.util.UUID;
  * likewise just a renamed filter over its creation timestamp, confirmed by reading its code directly).
  * {@code stateId}/{@code cityId} match a worker whose PERMANENT **or** CURRENT address (see
  * {@code AddressType}) references any of the given ids - a worker with two addresses on file is not
- * required to match on both, just either one.
+ * required to match on both, just either one. {@code faceEnrolled} is a single yes/no fact (null = no
+ * filter), not a {@link Set} like every other field here - unlike a multiselect filter, enrollment
+ * has no "any of several values" meaning.
  */
 public record WorkerSearchCriteria(
         Set<WorkerStatus> status,
-        Set<UUID> departmentId,
         Set<UUID> industryId,
         Set<UUID> designationId,
         Set<UUID> skillId,
@@ -29,6 +30,7 @@ public record WorkerSearchCriteria(
         LocalDate registeredFrom,
         LocalDate registeredTo,
         Set<UUID> stateId,
-        Set<UUID> cityId
+        Set<UUID> cityId,
+        Boolean faceEnrolled
 ) {
 }

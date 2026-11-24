@@ -305,4 +305,125 @@ class MinimumWageRateAdminIntegrationTest {
         assertThat(result.failures()).extracting(f -> f.id()).containsExactly(bogusId);
         assertThat(minimumWageRateService.get(real.id()).status()).isEqualTo(ActiveStatus.INACTIVE);
     }
+
+    @Test
+    void listCurrent_onePairWithThreeVersions_returnsExactlyOneRow_theVersionInForceAsOfTheGivenDate() {
+        UUID stateId = rajasthanId();
+        UUID categoryId = createSkillCategory("CurrentListingSingle");
+        minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(stateId, categoryId, new BigDecimal("400.00"), LocalDate.of(2026, 1, 1)));
+        MinimumWageRateResponse current = minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(stateId, categoryId, new BigDecimal("460.00"), LocalDate.of(2026, 6, 1)));
+        minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(stateId, categoryId, new BigDecimal("500.00"), LocalDate.of(2027, 1, 1)));
+
+        var page = minimumWageRateService.listCurrent(
+                new MinimumWageRateSearchCriteria(null, Set.of(categoryId), null),
+                LocalDate.of(2026, 9, 1), PageRequest.of(0, 100));
+
+        assertThat(page.content()).extracting(MinimumWageRateResponse::id).containsExactly(current.id());
+        assertThat(page.content().get(0).minDailyRate()).isEqualByComparingTo("460.00");
+    }
+
+    @Test
+    void listCurrent_withDifferentAsOfDates_resolvesDifferentVersions() {
+        UUID stateId = rajasthanId();
+        UUID categoryId = createSkillCategory("CurrentListingAsOf");
+        MinimumWageRateResponse early = minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(stateId, categoryId, new BigDecimal("400.00"), LocalDate.of(2026, 1, 1)));
+        MinimumWageRateResponse later = minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(stateId, categoryId, new BigDecimal("460.00"), LocalDate.of(2026, 6, 1)));
+
+        var beforeJune = minimumWageRateService.listCurrent(
+                new MinimumWageRateSearchCriteria(null, Set.of(categoryId), null),
+                LocalDate.of(2026, 3, 1), PageRequest.of(0, 100));
+        assertThat(beforeJune.content()).extracting(MinimumWageRateResponse::id).containsExactly(early.id());
+
+        var afterJune = minimumWageRateService.listCurrent(
+                new MinimumWageRateSearchCriteria(null, Set.of(categoryId), null),
+                LocalDate.of(2026, 12, 31), PageRequest.of(0, 100));
+        assertThat(afterJune.content()).extracting(MinimumWageRateResponse::id).containsExactly(later.id());
+    }
+
+    @Test
+    void listCurrent_groupsByTheFullStateAndSkillCategoryPair_notByEitherColumnAlone() {
+        UUID rajasthan = rajasthanId();
+        UUID maharashtra = stateIdByCode("MH");
+        UUID categoryA = createSkillCategory("CurrentGroupingA");
+        UUID categoryB = createSkillCategory("CurrentGroupingB");
+        LocalDate asOf = LocalDate.of(2026, 1, 15);
+        // Same state, different category.
+        MinimumWageRateResponse pairRajasthanA = minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(rajasthan, categoryA, new BigDecimal("400.00"), LocalDate.of(2026, 1, 1)));
+        MinimumWageRateResponse pairRajasthanB = minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(rajasthan, categoryB, new BigDecimal("410.00"), LocalDate.of(2026, 1, 1)));
+        // Different state, same category as A - must be its own group, not merged with pairRajasthanA.
+        MinimumWageRateResponse pairMaharashtraA = minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(maharashtra, categoryA, new BigDecimal("420.00"), LocalDate.of(2026, 1, 1)));
+
+        var page = minimumWageRateService.listCurrent(
+                new MinimumWageRateSearchCriteria(Set.of(rajasthan, maharashtra), Set.of(categoryA, categoryB), null),
+                asOf, PageRequest.of(0, 100));
+
+        assertThat(page.content()).extracting(MinimumWageRateResponse::id)
+                .containsExactlyInAnyOrder(pairRajasthanA.id(), pairRajasthanB.id(), pairMaharashtraA.id());
+    }
+
+    @Test
+    void listCurrent_pairWithNoActiveRowAsOfTheDate_isSimplyAbsent_notAnError() {
+        UUID stateId = rajasthanId();
+        UUID categoryId = createSkillCategory("CurrentListingFutureOnly");
+        minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(stateId, categoryId, new BigDecimal("400.00"), LocalDate.of(2027, 1, 1)));
+
+        var page = minimumWageRateService.listCurrent(
+                new MinimumWageRateSearchCriteria(null, Set.of(categoryId), null),
+                LocalDate.of(2026, 1, 1), PageRequest.of(0, 100));
+
+        assertThat(page.content()).isEmpty();
+        assertThat(page.totalElements()).isZero();
+    }
+
+    @Test
+    void listCurrent_respectsStateAndSkillCategoryFilters() {
+        UUID rajasthan = rajasthanId();
+        UUID maharashtra = stateIdByCode("MH");
+        UUID categoryId = createSkillCategory("CurrentListingFiltered");
+        LocalDate asOf = LocalDate.of(2026, 2, 1);
+        MinimumWageRateResponse rajasthanRate = minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(rajasthan, categoryId, new BigDecimal("400.00"), LocalDate.of(2026, 1, 1)));
+        minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(maharashtra, categoryId, new BigDecimal("420.00"), LocalDate.of(2026, 1, 1)));
+
+        var filtered = minimumWageRateService.listCurrent(
+                new MinimumWageRateSearchCriteria(Set.of(rajasthan), Set.of(categoryId), null), asOf, PageRequest.of(0, 100));
+
+        assertThat(filtered.content()).extracting(MinimumWageRateResponse::id).containsExactly(rajasthanRate.id());
+    }
+
+    @Test
+    void listCurrent_rejectsStatusAsASortField_unlikeTheFullHistoryList() {
+        assertThatThrownBy(() -> minimumWageRateService.listCurrent(new MinimumWageRateSearchCriteria(null, null, null),
+                LocalDate.of(2026, 1, 1), PageRequest.of(0, 10, Sort.by("status"))))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("status");
+    }
+
+    @Test
+    void filterOptions_returnsOnlyStatesAndSkillCategoriesActuallyReferencedByARate() {
+        UUID rajasthan = rajasthanId();
+        UUID categoryId = createSkillCategory("FilterOptionsTarget");
+        minimumWageRateService.create(
+                new CreateMinimumWageRateRequest(rajasthan, categoryId, new BigDecimal("400.00"), LocalDate.of(2026, 1, 1)));
+
+        var options = minimumWageRateService.filterOptions();
+
+        assertThat(options.states()).extracting(s -> s.id()).contains(rajasthan);
+        assertThat(options.skillCategories()).extracting(c -> c.id()).contains(categoryId);
+        // A skill category created but never used on any rate must NOT appear - proves this is scoped
+        // to actual usage, not just "every skill category that exists".
+        UUID unusedCategoryId = createSkillCategory("NeverUsedOnAnyRate");
+        var optionsAfter = minimumWageRateService.filterOptions();
+        assertThat(optionsAfter.skillCategories()).extracting(c -> c.id()).doesNotContain(unusedCategoryId);
+    }
 }

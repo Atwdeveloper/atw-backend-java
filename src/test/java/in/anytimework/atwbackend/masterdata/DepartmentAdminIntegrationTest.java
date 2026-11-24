@@ -3,22 +3,13 @@ package in.anytimework.atwbackend.masterdata;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DepartmentResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.UpdateDepartmentRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
 import in.anytimework.atwbackend.masterdata.application.DepartmentSearchCriteria;
 import in.anytimework.atwbackend.masterdata.application.DepartmentService;
-import in.anytimework.atwbackend.masterdata.application.DesignationService;
-import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.shared.api.BulkActionResult;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.shared.kernel.ActiveStatus;
-import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
-import in.anytimework.atwbackend.worker.application.WorkerService;
-import in.anytimework.atwbackend.worker.domain.Gender;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -40,28 +31,9 @@ class DepartmentAdminIntegrationTest {
 
     @Autowired
     private DepartmentService departmentService;
-    @Autowired
-    private WorkerService workerService;
-    @Autowired
-    private IndustryService industryService;
-    @Autowired
-    private DesignationService designationService;
 
     private static String unique() {
         return UUID.randomUUID().toString().substring(0, 8);
-    }
-
-    private static String uniqueMobile() {
-        return "9" + String.valueOf(System.nanoTime()).substring(0, 9);
-    }
-
-    /** A worker assigned to {@code departmentId} - exists purely to exercise the delete-guard tests below. */
-    private void createWorkerInDepartment(UUID departmentId) {
-        IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
-        DesignationResponse designation = designationService.create(
-                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
-        workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE, null,
-                uniqueMobile(), null, departmentId, null, null, Set.of(designation.id()), designation.id(), Set.of()));
     }
 
     @Test
@@ -203,32 +175,4 @@ class DepartmentAdminIntegrationTest {
         assertThatThrownBy(() -> departmentService.get(created.id())).isInstanceOf(ResourceNotFoundException.class);
     }
 
-    @Test
-    void delete_aDepartmentStillAssignedToAWorker_isRejectedWithAClearMessage() {
-        DepartmentResponse created = departmentService.create(new CreateDepartmentRequest("InUse " + unique()));
-        createWorkerInDepartment(created.id());
-
-        assertThatThrownBy(() -> departmentService.delete(created.id()))
-                .isInstanceOf(ConflictException.class)
-                .hasMessageContaining("workers");
-
-        // Still there afterward - the failed delete must not have left it half-removed.
-        assertThat(departmentService.get(created.id())).isNotNull();
-    }
-
-    @Test
-    void bulkDelete_partialSuccess_deletesTheFreeOneAndReportsTheBlockedOneWithoutLosingData() {
-        DepartmentResponse deletable = departmentService.create(new CreateDepartmentRequest("BulkDel1 " + unique()));
-        DepartmentResponse blocked = departmentService.create(new CreateDepartmentRequest("BulkDel2 " + unique()));
-        createWorkerInDepartment(blocked.id());
-
-        BulkActionResult result = departmentService.bulkDelete(Set.of(deletable.id(), blocked.id()));
-
-        assertThat(result.successCount()).isEqualTo(1);
-        assertThat(result.failures()).hasSize(1);
-        assertThat(result.failures().get(0).id()).isEqualTo(blocked.id());
-
-        assertThatThrownBy(() -> departmentService.get(deletable.id())).isInstanceOf(ResourceNotFoundException.class);
-        assertThat(departmentService.get(blocked.id())).isNotNull();
-    }
 }

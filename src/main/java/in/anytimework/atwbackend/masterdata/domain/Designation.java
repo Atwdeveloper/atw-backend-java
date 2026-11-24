@@ -6,22 +6,17 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.FetchType;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.JoinTable;
-import jakarta.persistence.ManyToMany;
 import jakarta.persistence.Table;
 import lombok.Getter;
-import org.hibernate.annotations.BatchSize;
 
-import java.util.HashSet;
-import java.util.Set;
 import java.util.UUID;
 
 /**
  * A job title/role (e.g. Helper, Supervisor) that a vacancy is posted under and a worker is hired
- * for. A designation can apply to multiple industries - same many-to-many shape as
- * {@code AdminUser.roles}, including the batch-fetch to avoid N+1 when a page of designations is listed.
+ * for. Its industry assignment (including which one is PRIMARY) lives on the separate
+ * {@link DesignationIndustry} entity/repository, not a field here - converted from a plain
+ * {@code @ManyToMany}/{@code @JoinTable} once the relationship needed to carry that extra
+ * {@code isPrimary} business column (see {@code DesignationIndustry}'s own Javadoc).
  *
  * <p>{@code skillCategoryId} is optional and exists purely to resolve the applicable
  * {@link MinimumWageRate} (state x skill category) for this designation - plain UUID, not a JPA
@@ -45,13 +40,6 @@ public class Designation extends BaseEntity {
 
     @Column(name = "skill_category_id")
     private UUID skillCategoryId;
-
-    @ManyToMany(fetch = FetchType.LAZY)
-    @JoinTable(name = "designation_industry",
-            joinColumns = @JoinColumn(name = "designation_id"),
-            inverseJoinColumns = @JoinColumn(name = "industry_id"))
-    @BatchSize(size = 50)
-    private Set<Industry> industries = new HashSet<>();
 
     protected Designation() {
         // required by JPA
@@ -81,11 +69,5 @@ public class Designation extends BaseEntity {
     /** Nullable: a designation isn't required to carry a minimum-wage classification. */
     public void assignSkillCategory(UUID skillCategoryId) {
         this.skillCategoryId = skillCategoryId;
-    }
-
-    /** Full replace: the designation applies to exactly {@code newIndustries} afterward, nothing more. */
-    public void replaceIndustries(Set<Industry> newIndustries) {
-        this.industries.clear();
-        this.industries.addAll(newIndustries);
     }
 }

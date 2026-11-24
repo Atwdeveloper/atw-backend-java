@@ -2,6 +2,7 @@ package in.anytimework.atwbackend.masterdata.api.admin;
 
 import in.anytimework.atwbackend.masterdata.api.admin.dto.BulkUpdateMinimumWageRateStatusRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateMinimumWageRateRequest;
+import in.anytimework.atwbackend.masterdata.api.admin.dto.MinimumWageRateFilterOptionsResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.MinimumWageRateResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.UpdateActiveStatusRequest;
 import in.anytimework.atwbackend.masterdata.application.MinimumWageRateSearchCriteria;
@@ -70,8 +71,11 @@ public class AdminMinimumWageRateController {
             Permission: `minimum_wage.view`.
 
             Paginated, multiselect-filterable, sortable list of rate rows (every version of every \
-            state/skill-category pair, not just the currently-effective one - use `GET /effective` below to \
-            resolve the single applicable rate as of a date). Default page size is 100, max 500. Default sort \
+            state/skill-category pair, not just the currently-effective one - use `GET /current` for the \
+            main listing's "one row per pair" view, or `GET /effective` to resolve a single applicable rate as \
+            of a date). Filtered to one `stateIds`/`skillCategoryIds` pair, this endpoint doubles as the \
+            per-pair history drill-down (past, current, and future-dated versions for that exact pair). \
+            Default page size is 100, max 500. Default sort \
             is `effectiveFrom,desc`. Allowed `sort` values: `effectiveFrom`, `minDailyRate`, `status`, \
             `createdAt` - any other value returns 400 VALIDATION_ERROR. There is no free-text `search` here - a \
             rate row has no name/label of its own to search by; use the `stateIds`/`skillCategoryIds` filters \
@@ -114,6 +118,80 @@ public class AdminMinimumWageRateController {
             @PageableDefault(sort = "effectiveFrom", direction = Sort.Direction.DESC) Pageable pageable) {
         return ApiResponse.ok(minimumWageRateService.list(
                 new MinimumWageRateSearchCriteria(stateIds, skillCategoryIds, statuses), pageable));
+    }
+
+    @GetMapping("/current")
+    @PreAuthorize("@authz.has('minimum_wage.view')")
+    @Operation(summary = "List the current rate for every (state, skill category) pair", description = """
+            Permission: `minimum_wage.view`.
+
+            The main "Minimum Wage" screen's listing: exactly ONE row per (state, skill category) pair - \
+            whichever version is currently in force as of `asOf` (defaults to today, server clock) - instead of \
+            every historical version. Uses the identical effective-rate rule as `GET /effective` (the latest \
+            `ACTIVE` row with `effectiveFrom <= asOf`), just resolved for every pair at once. A pair with no \
+            `ACTIVE` row in force as of `asOf` simply does not appear (same as `GET /effective` returning 404 \
+            for that pair) - it is never reported as an error.
+
+            To see a specific pair's full version history (past and future-dated rows), call `GET /` (the \
+            full-history endpoint above) filtered to that exact `stateIds`/`skillCategoryIds` pair - no separate \
+            history endpoint exists, since that filter already does exactly this.
+
+            Every row here is `ACTIVE` by construction, so there is no `statuses` filter and `status` is not a \
+            sortable field here (unlike `GET /`). Allowed `sort` values: `effectiveFrom`, `minDailyRate`, \
+            `createdAt`.""")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Page of current rates, one per (state, skill category) pair",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = MinimumWageRateResponse.class), examples = @ExampleObject(value = """
+                            {
+                              "success": true,
+                              "data": {
+                                "content": [
+                                  {
+                                    "id": "4a5b6c7d-8e9f-4a1b-9c2d-3e4f5a6b7c8d",
+                                    "stateId": "4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2",
+                                    "stateName": "Rajasthan",
+                                    "skillCategoryId": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a",
+                                    "skillCategoryName": "Skilled",
+                                    "minDailyRate": 650.00,
+                                    "effectiveFrom": "2026-04-01",
+                                    "status": "ACTIVE"
+                                  }
+                                ],
+                                "page": 0, "size": 100, "totalElements": 1, "totalPages": 1, "first": true, "last": true
+                              },
+                              "error": null
+                            }"""))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Unsupported `sort` property",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
+                            { "success": false, "data": null, "error": { "code": "VALIDATION_ERROR", "message": "Cannot sort by 'status'. Allowed fields: createdAt, effectiveFrom, minDailyRate", "fieldErrors": null, "timestamp": "2026-11-01T10:25:00Z", "traceId": "303a4b5c6d071829" } }""")))
+    })
+    public ApiResponse<PageResponse<MinimumWageRateResponse>> listCurrent(
+            @Parameter(description = "Return only pairs for one of these states. Repeat the param for multiple values. Omit for every state.")
+            @RequestParam(required = false) Set<UUID> stateIds,
+            @Parameter(description = "Return only pairs for one of these skill categories. Repeat the param for multiple values. Omit for every skill category.")
+            @RequestParam(required = false) Set<UUID> skillCategoryIds,
+            @Parameter(description = "Date to resolve each pair's current rate as of, `yyyy-MM-dd`. Defaults to today (server clock) when omitted.", example = "2026-04-15")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate asOf,
+            @Parameter(description = "Standard Spring page/size/sort params - see this operation's description.")
+            @PageableDefault(sort = "effectiveFrom", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ApiResponse.ok(minimumWageRateService.listCurrent(
+                new MinimumWageRateSearchCriteria(stateIds, skillCategoryIds, null), asOf, pageable));
+    }
+
+    @GetMapping("/filter-options")
+    @PreAuthorize("@authz.has('minimum_wage.view')")
+    @Operation(summary = "Scoped filter-dropdown options for this listing", description = """
+            Permission: `minimum_wage.view`.
+
+            Only the states/skill categories actually referenced by at least one rate row today - not every \
+            masterdata state/skill-category - for populating this screen's own filter dropdowns.""")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Scoped filter options",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = MinimumWageRateFilterOptionsResponse.class), examples = @ExampleObject(value = """
+                            { "success": true, "data": { "states": [ { "id": "4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2", "name": "Rajasthan", "code": "RJ" } ], "skillCategories": [ { "id": "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a", "name": "Skilled", "code": "SKC0000001" } ] }, "error": null }""")))
+    })
+    public ApiResponse<MinimumWageRateFilterOptionsResponse> filterOptions() {
+        return ApiResponse.ok(minimumWageRateService.filterOptions());
     }
 
     @GetMapping("/{id}")

@@ -28,9 +28,6 @@ public record UpdateWorkerRequest(
                 + "worker's own current row.", example = "9876543210")
         @NotBlank @Size(max = 20) String mobileNumber,
         @Schema(example = "ramesh.kumar@example.com") @Email @Size(max = 191) String personalEmail,
-        @Schema(description = "Optional id of an existing department (Masterdata module); when given, must exist.",
-                example = "1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d", nullable = true)
-        UUID departmentId,
         @Schema(description = "Optional industry id (Masterdata module); when given, must exist.",
                 example = "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", nullable = true)
         UUID industryId,

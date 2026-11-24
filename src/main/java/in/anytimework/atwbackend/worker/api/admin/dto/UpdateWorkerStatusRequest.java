@@ -10,8 +10,7 @@ import jakarta.validation.constraints.Size;
         + "each other into an unpredictable end state). REGISTERED and KYC_PENDING can never be set "
         + "here - they're reached only automatically. ACTIVE can only be reached here from SUSPENDED or "
         + "INACTIVE - from REGISTERED/KYC_PENDING, a worker becomes ACTIVE only by completing KYC "
-        + "verification. Setting the same status the worker is already in is rejected. Entering or "
-        + "leaving BLACKLISTED additionally requires the caller to be a super-admin.")
+        + "verification. Setting the same status the worker is already in is rejected.")
 public record UpdateWorkerStatusRequest(
         @Schema(example = "SUSPENDED") @NotNull WorkerStatus status,
         @Schema(description = "Required when status is SUSPENDED, BLACKLISTED, or INACTIVE; ignored "

@@ -5,16 +5,18 @@ import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationReque
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateSkillCategoryRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateSkillRequest;
+import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationIndustryRef;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.SkillCategoryResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.UpdateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.application.DesignationSearchCriteria;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
-import in.anytimework.atwbackend.masterdata.application.lookup.IndustrySummary;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.masterdata.application.SkillCategoryService;
 import in.anytimework.atwbackend.masterdata.application.SkillService;
+import in.anytimework.atwbackend.masterdata.domain.DesignationIndustry;
+import in.anytimework.atwbackend.masterdata.domain.DesignationIndustryRepository;
 import in.anytimework.atwbackend.shared.api.BulkActionResult;
 import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
@@ -25,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.test.context.ActiveProfiles;
@@ -52,6 +55,8 @@ class DesignationAdminIntegrationTest {
     private SkillCategoryService skillCategoryService;
     @Autowired
     private SkillService skillService;
+    @Autowired
+    private DesignationIndustryRepository designationIndustryRepository;
 
     private static String unique() {
         return UUID.randomUUID().toString().substring(0, 8);
@@ -66,12 +71,13 @@ class DesignationAdminIntegrationTest {
         IndustryResponse construction = createIndustry("Construction");
 
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Site Supervisor " + unique(), Set.of(construction.id()), null));
+                new CreateDesignationRequest("Site Supervisor " + unique(), Set.of(construction.id()), construction.id(), null));
 
         assertThat(created.status()).isEqualTo(ActiveStatus.ACTIVE);
-        assertThat(created.industries()).extracting(IndustrySummary::id).containsExactly(construction.id());
+        assertThat(created.industries()).extracting(DesignationIndustryRef::id).containsExactly(construction.id());
+        assertThat(created.industries()).extracting(DesignationIndustryRef::primary).containsExactly(true);
         DesignationResponse fetched = designationService.get(created.id());
-        assertThat(fetched.industries()).extracting(IndustrySummary::id).containsExactly(construction.id());
+        assertThat(fetched.industries()).extracting(DesignationIndustryRef::id).containsExactly(construction.id());
     }
 
     @Test
@@ -80,31 +86,57 @@ class DesignationAdminIntegrationTest {
         IndustryResponse b = createIndustry("Logistics");
 
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Forklift Operator " + unique(), Set.of(a.id(), b.id()), null));
+                new CreateDesignationRequest("Forklift Operator " + unique(), Set.of(a.id(), b.id()), a.id(), null));
 
-        assertThat(created.industries()).extracting(IndustrySummary::id).containsExactlyInAnyOrder(a.id(), b.id());
+        assertThat(created.industries()).extracting(DesignationIndustryRef::id).containsExactlyInAnyOrder(a.id(), b.id());
     }
 
     @Test
     void create_withNoIndustries_isRejected() {
-        assertThatThrownBy(() -> designationService.create(new CreateDesignationRequest("Orphan Role " + unique(), Set.of(), null)))
+        assertThatThrownBy(() -> designationService.create(
+                new CreateDesignationRequest("Orphan Role " + unique(), Set.of(), UUID.randomUUID(), null)))
                 .isInstanceOf(ValidationException.class);
     }
 
     @Test
     void create_withUnknownIndustryId_isRejected() {
+        UUID ghostIndustryId = UUID.randomUUID();
         assertThatThrownBy(() -> designationService.create(
-                new CreateDesignationRequest("Ghost Role " + unique(), Set.of(UUID.randomUUID()), null)))
+                new CreateDesignationRequest("Ghost Role " + unique(), Set.of(ghostIndustryId), ghostIndustryId, null)))
                 .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void create_withPrimaryIndustryIdNotInIndustryIds_isRejected() {
+        IndustryResponse industry = createIndustry("Aviation");
+        IndustryResponse notSelected = createIndustry("Aerospace");
+
+        assertThatThrownBy(() -> designationService.create(new CreateDesignationRequest(
+                "Ground Crew " + unique(), Set.of(industry.id()), notSelected.id(), null)))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("primaryIndustryId");
+    }
+
+    @Test
+    void update_withPrimaryIndustryIdNotInIndustryIds_isRejected() {
+        IndustryResponse industry = createIndustry("Telecom");
+        IndustryResponse notSelected = createIndustry("Broadcasting");
+        DesignationResponse created = designationService.create(new CreateDesignationRequest(
+                "Technician " + unique(), Set.of(industry.id()), industry.id(), null));
+
+        assertThatThrownBy(() -> designationService.update(created.id(), new UpdateDesignationRequest(
+                created.name(), Set.of(industry.id()), notSelected.id())))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("primaryIndustryId");
     }
 
     @Test
     void create_withDuplicateName_isRejected() {
         IndustryResponse industry = createIndustry("Retail");
         String name = "Cashier " + unique();
-        designationService.create(new CreateDesignationRequest(name, Set.of(industry.id()), null));
+        designationService.create(new CreateDesignationRequest(name, Set.of(industry.id()), industry.id(), null));
 
-        assertThatThrownBy(() -> designationService.create(new CreateDesignationRequest(name, Set.of(industry.id()), null)))
+        assertThatThrownBy(() -> designationService.create(new CreateDesignationRequest(name, Set.of(industry.id()), industry.id(), null)))
                 .isInstanceOf(ConflictException.class);
     }
 
@@ -113,12 +145,31 @@ class DesignationAdminIntegrationTest {
         IndustryResponse first = createIndustry("Hospitality");
         IndustryResponse second = createIndustry("Events");
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Front Desk " + unique(), Set.of(first.id()), null));
+                new CreateDesignationRequest("Front Desk " + unique(), Set.of(first.id()), first.id(), null));
 
         DesignationResponse updated = designationService.update(created.id(),
-                new UpdateDesignationRequest(created.name(), Set.of(second.id())));
+                new UpdateDesignationRequest(created.name(), Set.of(second.id()), second.id()));
 
-        assertThat(updated.industries()).extracting(IndustrySummary::id).containsExactly(second.id());
+        assertThat(updated.industries()).extracting(DesignationIndustryRef::id).containsExactly(second.id());
+        assertThat(updated.industries()).extracting(DesignationIndustryRef::primary).containsExactly(true);
+    }
+
+    @Test
+    void update_exactlyOnePrimarySurvivesEvenWhenNewSetDropsTheOldPrimary() {
+        IndustryResponse first = createIndustry("Chemicals");
+        IndustryResponse second = createIndustry("Pharma");
+        IndustryResponse third = createIndustry("Biotech");
+        DesignationResponse created = designationService.create(new CreateDesignationRequest(
+                "Lab Tech " + unique(), Set.of(first.id(), second.id()), first.id(), null));
+
+        // New set no longer contains the old primary (first) at all - primaryIndustryId must be
+        // freshly supplied, never implicitly carried over.
+        DesignationResponse updated = designationService.update(created.id(), new UpdateDesignationRequest(
+                created.name(), Set.of(second.id(), third.id()), third.id()));
+
+        assertThat(updated.industries()).hasSize(2);
+        assertThat(updated.industries()).filteredOn(DesignationIndustryRef::primary)
+                .extracting(DesignationIndustryRef::id).containsExactly(third.id());
     }
 
     @Test
@@ -127,8 +178,8 @@ class DesignationAdminIntegrationTest {
         IndustryResponse other = createIndustry("Unrelated");
         String name = "Machine Operator " + unique();
         DesignationResponse inTarget = designationService.create(
-                new CreateDesignationRequest(name, Set.of(target.id()), null));
-        designationService.create(new CreateDesignationRequest("Unrelated Role " + unique(), Set.of(other.id()), null));
+                new CreateDesignationRequest(name, Set.of(target.id()), target.id(), null));
+        designationService.create(new CreateDesignationRequest("Unrelated Role " + unique(), Set.of(other.id()), other.id(), null));
 
         // Filtered by this test's own unique name too (gotcha: an unfiltered/industry-only page can't
         // be assumed free of unrelated rows from other tests/runs that also reference this industry).
@@ -138,7 +189,33 @@ class DesignationAdminIntegrationTest {
 
         assertThat(filtered).extracting(DesignationResponse::id).containsExactly(inTarget.id());
         assertThat(filtered).allSatisfy(d ->
-                assertThat(d.industries()).extracting(IndustrySummary::id).contains(target.id()));
+                assertThat(d.industries()).extracting(DesignationIndustryRef::id).contains(target.id()));
+    }
+
+    @Test
+    void list_batchResolvesPrimaryFlagAcrossAPageWithoutCrossDesignationMixup() {
+        // Regression target: industryRefsByDesignationId batches across the whole page in 2 queries -
+        // this proves each designation's own primary flag is correctly attributed to IT, not to
+        // whichever row happened to be grouped/iterated nearby.
+        String token = "Batch" + unique();
+        IndustryResponse x = createIndustry("BatchIndX");
+        IndustryResponse y = createIndustry("BatchIndY");
+        DesignationResponse first = designationService.create(new CreateDesignationRequest(
+                token + " First", Set.of(x.id(), y.id()), x.id(), null));
+        DesignationResponse second = designationService.create(new CreateDesignationRequest(
+                token + " Second", Set.of(x.id(), y.id()), y.id(), null));
+
+        List<DesignationResponse> page = designationService
+                .list(new DesignationSearchCriteria(null, null, null, token), PageRequest.of(0, 100))
+                .content();
+
+        assertThat(page).hasSize(2);
+        DesignationResponse firstFetched = page.stream().filter(d -> d.id().equals(first.id())).findFirst().orElseThrow();
+        DesignationResponse secondFetched = page.stream().filter(d -> d.id().equals(second.id())).findFirst().orElseThrow();
+        assertThat(firstFetched.industries()).filteredOn(DesignationIndustryRef::primary)
+                .extracting(DesignationIndustryRef::id).containsExactly(x.id());
+        assertThat(secondFetched.industries()).filteredOn(DesignationIndustryRef::primary)
+                .extracting(DesignationIndustryRef::id).containsExactly(y.id());
     }
 
     @Test
@@ -147,9 +224,9 @@ class DesignationAdminIntegrationTest {
         IndustryResponse indA = createIndustry("MultiIndA");
         IndustryResponse indB = createIndustry("MultiIndB");
         DesignationResponse inA = designationService.create(
-                new CreateDesignationRequest(token + " InA", Set.of(indA.id()), null));
+                new CreateDesignationRequest(token + " InA", Set.of(indA.id()), indA.id(), null));
         DesignationResponse inB = designationService.create(
-                new CreateDesignationRequest(token + " InB", Set.of(indB.id()), null));
+                new CreateDesignationRequest(token + " InB", Set.of(indB.id()), indB.id(), null));
         designationService.updateStatus(inB.id(), ActiveStatus.INACTIVE);
 
         // OR within the industryIds field: a designation matching EITHER selected industry comes back,
@@ -172,7 +249,7 @@ class DesignationAdminIntegrationTest {
     void list_resolvesImageUrlForARowThatHasOne() {
         String name = "ImageInList " + unique();
         IndustryResponse industry = createIndustry("ImageListIndustry");
-        DesignationResponse created = designationService.create(new CreateDesignationRequest(name, Set.of(industry.id()), null));
+        DesignationResponse created = designationService.create(new CreateDesignationRequest(name, Set.of(industry.id()), industry.id(), null));
         designationService.uploadImage(created.id(), "icon.png", "image/png", PNG_BYTES);
 
         List<DesignationResponse> page = designationService
@@ -187,8 +264,8 @@ class DesignationAdminIntegrationTest {
     void list_sortsByNameAscendingOrDescending() {
         IndustryResponse industry = createIndustry("SortDesigIndustry");
         String prefix = "SortDesig" + unique();
-        DesignationResponse beta = designationService.create(new CreateDesignationRequest(prefix + " Beta", Set.of(industry.id()), null));
-        DesignationResponse alpha = designationService.create(new CreateDesignationRequest(prefix + " Alpha", Set.of(industry.id()), null));
+        DesignationResponse beta = designationService.create(new CreateDesignationRequest(prefix + " Beta", Set.of(industry.id()), industry.id(), null));
+        DesignationResponse alpha = designationService.create(new CreateDesignationRequest(prefix + " Alpha", Set.of(industry.id()), industry.id(), null));
 
         List<DesignationResponse> ascending = designationService
                 .list(new DesignationSearchCriteria(null, null, null, prefix), PageRequest.of(0, 100, Sort.by("name").ascending()))
@@ -213,9 +290,9 @@ class DesignationAdminIntegrationTest {
     void bulkUpdateStatus_updatesEveryIdAndReportsSuccessCount() {
         IndustryResponse industry = createIndustry("BulkStatusIndustry");
         DesignationResponse first = designationService.create(
-                new CreateDesignationRequest("BulkStatus1 " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("BulkStatus1 " + unique(), Set.of(industry.id()), industry.id(), null));
         DesignationResponse second = designationService.create(
-                new CreateDesignationRequest("BulkStatus2 " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("BulkStatus2 " + unique(), Set.of(industry.id()), industry.id(), null));
 
         BulkActionResult result = designationService.bulkUpdateStatus(
                 Set.of(first.id(), second.id()), ActiveStatus.INACTIVE);
@@ -230,7 +307,7 @@ class DesignationAdminIntegrationTest {
     void bulkUpdateStatus_withAnUnknownId_reportsItAsAFailureWithoutAffectingOthers() {
         IndustryResponse industry = createIndustry("BulkStatusIndustry2");
         DesignationResponse real = designationService.create(
-                new CreateDesignationRequest("BulkStatus3 " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("BulkStatus3 " + unique(), Set.of(industry.id()), industry.id(), null));
         UUID bogusId = UUID.randomUUID();
 
         BulkActionResult result = designationService.bulkUpdateStatus(Set.of(real.id(), bogusId), ActiveStatus.INACTIVE);
@@ -244,7 +321,7 @@ class DesignationAdminIntegrationTest {
     void delete_removesADesignationWithNoReferences() {
         IndustryResponse industry = createIndustry("DeletableIndustry");
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Deletable " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("Deletable " + unique(), Set.of(industry.id()), industry.id(), null));
 
         designationService.delete(created.id());
 
@@ -255,7 +332,7 @@ class DesignationAdminIntegrationTest {
     void delete_aDesignationStillReferencedByASkill_isRejectedWithAClearMessage() {
         IndustryResponse industry = createIndustry("InUseIndustry");
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("InUse " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("InUse " + unique(), Set.of(industry.id()), industry.id(), null));
         skillService.create(new CreateSkillRequest("Blocking Skill " + unique(), created.id()));
 
         assertThatThrownBy(() -> designationService.delete(created.id()))
@@ -270,9 +347,9 @@ class DesignationAdminIntegrationTest {
     void bulkDelete_partialSuccess_deletesTheFreeOneAndReportsTheBlockedOneWithoutLosingData() {
         IndustryResponse industry = createIndustry("BulkDelIndustry");
         DesignationResponse deletable = designationService.create(
-                new CreateDesignationRequest("BulkDel1 " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("BulkDel1 " + unique(), Set.of(industry.id()), industry.id(), null));
         DesignationResponse blocked = designationService.create(
-                new CreateDesignationRequest("BulkDel2 " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("BulkDel2 " + unique(), Set.of(industry.id()), industry.id(), null));
         skillService.create(new CreateSkillRequest("Blocking Skill 2 " + unique(), blocked.id()));
 
         BulkActionResult result = designationService.bulkDelete(Set.of(deletable.id(), blocked.id()));
@@ -289,7 +366,7 @@ class DesignationAdminIntegrationTest {
     void updateStatus_deactivatesThenReactivates() {
         IndustryResponse industry = createIndustry("Mining");
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Driller " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("Driller " + unique(), Set.of(industry.id()), industry.id(), null));
 
         DesignationResponse deactivated = designationService.updateStatus(created.id(), ActiveStatus.INACTIVE);
         assertThat(deactivated.status()).isEqualTo(ActiveStatus.INACTIVE);
@@ -302,7 +379,7 @@ class DesignationAdminIntegrationTest {
     void uploadImage_thenGet_exposesAResolvedUrl() {
         IndustryResponse industry = createIndustry("Packaging");
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Packer " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("Packer " + unique(), Set.of(industry.id()), industry.id(), null));
 
         DesignationResponse withImage = designationService.uploadImage(created.id(), "icon.png", "image/png", PNG_BYTES);
 
@@ -316,7 +393,7 @@ class DesignationAdminIntegrationTest {
         SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest(categoryName));
 
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Loom Operator " + unique(), Set.of(industry.id()), category.id()));
+                new CreateDesignationRequest("Loom Operator " + unique(), Set.of(industry.id()), industry.id(), category.id()));
 
         assertThat(created.skillCategoryId()).isEqualTo(category.id());
         assertThat(created.skillCategoryName()).isEqualTo(categoryName);
@@ -332,7 +409,7 @@ class DesignationAdminIntegrationTest {
         String categoryName = "Semi-Skilled " + unique();
         SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest(categoryName));
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Molder " + unique(), Set.of(industry.id()), category.id()));
+                new CreateDesignationRequest("Molder " + unique(), Set.of(industry.id()), industry.id(), category.id()));
 
         PageResponse<DesignationResponse> page = designationService.list(
                 new DesignationSearchCriteria(Set.of(industry.id()), null, null, null), PageRequest.of(0, 10));
@@ -349,10 +426,10 @@ class DesignationAdminIntegrationTest {
         IndustryResponse industry = createIndustry("Leather");
         SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest("Skilled " + unique()));
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Tanner " + unique(), Set.of(industry.id()), category.id()));
+                new CreateDesignationRequest("Tanner " + unique(), Set.of(industry.id()), industry.id(), category.id()));
 
         DesignationResponse updated = designationService.update(created.id(),
-                new UpdateDesignationRequest("Tanner Renamed " + unique(), Set.of(industry.id())));
+                new UpdateDesignationRequest("Tanner Renamed " + unique(), Set.of(industry.id()), industry.id()));
 
         assertThat(updated.skillCategoryId()).isEqualTo(category.id());
     }
@@ -363,7 +440,7 @@ class DesignationAdminIntegrationTest {
         String categoryName = "Carpentry " + unique();
         SkillCategoryResponse category = skillCategoryService.create(new CreateSkillCategoryRequest(categoryName));
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Cabinet Maker " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("Cabinet Maker " + unique(), Set.of(industry.id()), industry.id(), null));
         assertThat(created.skillCategoryId()).isNull();
         assertThat(created.skillCategoryName()).isNull();
 
@@ -380,7 +457,7 @@ class DesignationAdminIntegrationTest {
     void assignSkillCategory_withUnknownId_isRejected() {
         IndustryResponse industry = createIndustry("Glassware");
         DesignationResponse created = designationService.create(
-                new CreateDesignationRequest("Glass Blower " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("Glass Blower " + unique(), Set.of(industry.id()), industry.id(), null));
 
         assertThatThrownBy(() -> designationService.assignSkillCategory(created.id(), UUID.randomUUID()))
                 .isInstanceOf(ValidationException.class);
@@ -391,7 +468,27 @@ class DesignationAdminIntegrationTest {
         IndustryResponse industry = createIndustry("Printing");
 
         assertThatThrownBy(() -> designationService.create(
-                new CreateDesignationRequest("Press Operator " + unique(), Set.of(industry.id()), UUID.randomUUID())))
+                new CreateDesignationRequest("Press Operator " + unique(), Set.of(industry.id()), industry.id(), UUID.randomUUID())))
                 .isInstanceOf(ValidationException.class);
+    }
+
+    @Test
+    void uqDesignationIndustryPrimary_rejectsASecondPrimaryRowForTheSameDesignation() {
+        // DesignationService's own create()/update() can never produce this state (saveIndustries
+        // marks exactly one row primary per call) - this proves the DB-level guarantee
+        // (uq_designation_industry_primary, V42) holds even against a write that bypasses the
+        // service entirely, the same safety net uq_worker_designation_primary already gives workers.
+        IndustryResponse first = createIndustry("Mining Equipment");
+        IndustryResponse second = createIndustry("Heavy Machinery");
+        IndustryResponse third = createIndustry("Industrial Safety");
+        DesignationResponse created = designationService.create(new CreateDesignationRequest(
+                "Rigger " + unique(), Set.of(first.id(), second.id()), first.id(), null));
+
+        // third is NOT already one of this designation's industries, so the only constraint this
+        // insert can trip is uq_designation_industry_primary (not the plain designation+industry
+        // uniqueness one, which a repeat of first/second would hit instead and prove nothing new).
+        assertThatThrownBy(() -> designationIndustryRepository
+                .save(new DesignationIndustry(created.id(), third.id(), true)))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 }

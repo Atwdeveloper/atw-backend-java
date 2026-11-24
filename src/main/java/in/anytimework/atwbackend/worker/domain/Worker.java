@@ -21,10 +21,11 @@ import java.util.UUID;
  * module splits {@code AdminUser} from {@code AdminUserAddress}/{@code AdminUserKyc}/
  * {@code AdminUserBankDetail}.
  *
- * <p>{@code departmentId}/{@code industryId} are plain UUIDs into the masterdata module, validated
- * via its lookup services, never a JPA relationship - a designation/skill assignment is a genuine
- * many-valued relationship (see {@link WorkerDesignation}/{@link WorkerSkill}) so it gets its own
- * table instead of a column here.</p>
+ * <p>{@code industryId} is a plain UUID into the masterdata module, validated via its lookup
+ * service, never a JPA relationship - a designation/skill assignment is a genuine many-valued
+ * relationship (see {@link WorkerDesignation}/{@link WorkerSkill}) so it gets its own table instead
+ * of a column here. (A {@code departmentId} column existed here too until it was removed - department
+ * classification was never actually enforced or used anywhere downstream, confirmed before removal.)</p>
  *
  * <p><strong>Soft delete:</strong> {@link #markDeleted} sets {@code deletedAt} rather than the row
  * ever being physically removed - see {@code WorkerService.delete()}'s Javadoc for the full business
@@ -78,10 +79,6 @@ public class Worker extends BaseEntity {
     @Column(name = "personal_email", length = 191)
     private String personalEmail;
 
-    /** Optional - not every worker is classified into a department (see Worker's class Javadoc history). */
-    @Column(name = "department_id")
-    private UUID departmentId;
-
     @Column(name = "industry_id")
     private UUID industryId;
 
@@ -108,7 +105,7 @@ public class Worker extends BaseEntity {
 
     public Worker(String workerCode, String firstName, String middleName, String lastName, String fatherName,
                  Gender gender, LocalDate dateOfBirth, String mobileNumber, String personalEmail,
-                 UUID departmentId, UUID industryId, Integer workExperienceYears) {
+                 UUID industryId, Integer workExperienceYears) {
         this.workerCode = workerCode;
         this.firstName = firstName;
         this.middleName = middleName;
@@ -118,7 +115,6 @@ public class Worker extends BaseEntity {
         this.dateOfBirth = dateOfBirth;
         this.mobileNumber = mobileNumber;
         this.personalEmail = personalEmail;
-        this.departmentId = departmentId;
         this.industryId = industryId;
         this.workExperienceYears = workExperienceYears;
         this.status = WorkerStatus.REGISTERED;
@@ -126,7 +122,7 @@ public class Worker extends BaseEntity {
 
     public void updateProfile(String firstName, String middleName, String lastName, String fatherName, Gender gender,
                               LocalDate dateOfBirth, String mobileNumber, String personalEmail,
-                              UUID departmentId, UUID industryId, Integer workExperienceYears) {
+                              UUID industryId, Integer workExperienceYears) {
         this.firstName = firstName;
         this.middleName = middleName;
         this.lastName = lastName;
@@ -135,7 +131,6 @@ public class Worker extends BaseEntity {
         this.dateOfBirth = dateOfBirth;
         this.mobileNumber = mobileNumber;
         this.personalEmail = personalEmail;
-        this.departmentId = departmentId;
         this.industryId = industryId;
         this.workExperienceYears = workExperienceYears;
     }

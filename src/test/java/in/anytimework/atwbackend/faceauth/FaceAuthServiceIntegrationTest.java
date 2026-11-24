@@ -6,13 +6,10 @@ import in.anytimework.atwbackend.faceauth.application.dto.FaceEnrollmentDto;
 import in.anytimework.atwbackend.faceauth.application.dto.FaceIdentificationResult;
 import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollment;
 import in.anytimework.atwbackend.faceauth.domain.WorkerFaceEnrollmentRepository;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.DepartmentResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
-import in.anytimework.atwbackend.masterdata.application.DepartmentService;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
@@ -55,8 +52,6 @@ class FaceAuthServiceIntegrationTest {
     @Autowired
     private WorkerService workerService;
     @Autowired
-    private DepartmentService departmentService;
-    @Autowired
     private IndustryService industryService;
     @Autowired
     private DesignationService designationService;
@@ -70,12 +65,11 @@ class FaceAuthServiceIntegrationTest {
     }
 
     private UUID createWorker() {
-        DepartmentResponse department = departmentService.create(new CreateDepartmentRequest("Dept " + unique()));
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
         DesignationResponse designation = designationService.create(
-                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), industry.id(), null));
         WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null,
-                Gender.MALE, null, uniqueMobile(), null, department.id(), null, null,
+                Gender.MALE, null, uniqueMobile(), null, null, null,
                 Set.of(designation.id()), designation.id(), Set.of()));
         return worker.id();
     }
