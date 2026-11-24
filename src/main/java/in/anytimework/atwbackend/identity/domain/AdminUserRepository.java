@@ -41,6 +41,10 @@ public interface AdminUserRepository extends JpaRepository<AdminUser, UUID>, Jpa
     /** How many admins currently hold this role — used to block deleting a role still in use. */
     long countByRolesId(UUID roleId);
 
+    /** Distinct role ids assigned to at least one admin - backs the staff filter-options endpoint. */
+    @Query("select distinct r.id from AdminUser a join a.roles r")
+    List<UUID> findDistinctAssignedRoleIds();
+
     interface SecurityProjection {
         int getSecurityVersion();
 

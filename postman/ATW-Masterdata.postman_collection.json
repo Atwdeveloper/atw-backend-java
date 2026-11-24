@@ -3212,7 +3212,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n        \"name\": \"Mason\",\n        \"status\": \"ACTIVE\",\n        \"imageUrl\": null,\n        \"industries\": [\n          {\n            \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n            \"name\": \"Construction & Real Estate\",\n            \"code\": \"IND0000001\"\n          }\n        ],\n        \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 1,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n        \"name\": \"Mason\",\n        \"status\": \"ACTIVE\",\n        \"imageUrl\": null,\n        \"industries\": [\n          {\n            \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n            \"name\": \"Construction & Real Estate\",\n            \"code\": \"IND0000001\",\n            \"primary\": true\n          }\n        ],\n        \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 1,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
             },
             {
               "name": "400 - Unsupported sort property",
@@ -3320,7 +3320,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}"
             }
           ]
         },
@@ -3412,7 +3412,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
             },
             {
               "name": "400 - At least one industry must be selected",
@@ -3584,7 +3584,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}",
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}",
               "_comment": "Note skillCategoryId is still populated here even though this request's body never mentioned it - it was set previously via Assign Skill Category below and Update cannot clear it."
             }
           ]
@@ -3677,7 +3677,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}"
             }
           ]
         },
@@ -3899,7 +3899,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\"\n  },\n  \"error\": null\n}"
             }
           ]
         },
@@ -3973,7 +3973,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
             }
           ]
         },
@@ -4067,7 +4067,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": \"https://atwstorage.blob.core.windows.net/documents/designation-icon/3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b.png?sv=2025-05-05&se=2026-11-01T10%3A30%3A00Z&sr=b&sp=r&sig=REDACTED\",\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": \"https://atwstorage.blob.core.windows.net/documents/designation-icon/3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b.png?sv=2025-05-05&se=2026-11-01T10%3A30%3A00Z&sr=b&sp=r&sig=REDACTED\",\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
             }
           ]
         },
@@ -4141,7 +4141,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b\",\n    \"name\": \"Mason (Skilled)\",\n    \"status\": \"ACTIVE\",\n    \"imageUrl\": null,\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction & Real Estate\",\n        \"code\": \"IND0000001\",\n        \"primary\": true\n      }\n    ],\n    \"skillCategoryId\": null\n  },\n  \"error\": null\n}"
             }
           ]
         },
@@ -5595,6 +5595,266 @@
               ],
               "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Cannot sort by 'stateName'. Allowed fields: createdAt, effectiveFrom, minDailyRate, status\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-11-01T10:25:00Z\",\n    \"traceId\": \"303a4b5c6d071829\"\n  }\n}",
               "_comment": "stateName/skillCategoryName are resolved after the query runs (a batched lookup, not real columns on the rate row) - exactly like designationName on Skills - so neither is sortable, same reasoning as every other entity's batch-resolved display field."
+            }
+          ]
+        },
+        {
+          "name": "List Current Minimum Wage Rates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/masterdata/minimum-wage-rates/current?stateIds={{stateId}}&skillCategoryIds={{skillCategoryId}}&page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "masterdata",
+                "minimum-wage-rates",
+                "current"
+              ],
+              "query": [
+                {
+                  "key": "stateIds",
+                  "value": "{{stateId}}"
+                },
+                {
+                  "key": "skillCategoryIds",
+                  "value": "{{skillCategoryId}}"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "**Permission:** `minimum_wage.view`.\n\nOne row per (state, skill category) combination, showing ONLY the rate currently in force (or in force as of the optional `asOf` date, default today) - never every historical version. Use this for the main Minimum Wage list screen; use the plain `GET /minimum-wage-rates` (filtered to one state + one skill category) as the drill-down showing that pair's full past/future version history. Supports the same `stateIds`/`skillCategoryIds` filters as the full list, but not `statuses` (every row returned is ACTIVE by construction) and does not allow sorting by `status` for the same reason.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `minimum_wage.view` | `ACCESS_DENIED` | 403 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 2xx\", function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test(\"Envelope has success:true\", function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/masterdata/minimum-wage-rates/current?stateIds={{stateId}}&skillCategoryIds={{skillCategoryId}}&page=0&size=20",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "masterdata",
+                    "minimum-wage-rates",
+                    "current"
+                  ],
+                  "query": [
+                    {
+                      "key": "stateIds",
+                      "value": "{{stateId}}"
+                    },
+                    {
+                      "key": "skillCategoryIds",
+                      "value": "{{skillCategoryId}}"
+                    },
+                    {
+                      "key": "page",
+                      "value": "0"
+                    },
+                    {
+                      "key": "size",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"4a5b6c7d-8e9f-4a1b-9c2d-3e4f5a6b7c8d\",\n        \"stateId\": \"4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2\",\n        \"stateName\": \"Rajasthan\",\n        \"skillCategoryId\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\",\n        \"skillCategoryName\": \"Skilled\",\n        \"minDailyRate\": 650.0,\n        \"effectiveFrom\": \"2026-04-01\",\n        \"status\": \"ACTIVE\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 20,\n    \"totalElements\": 1,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/masterdata/minimum-wage-rates/current?stateIds={{stateId}}&skillCategoryIds={{skillCategoryId}}&page=0&size=20",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "masterdata",
+                    "minimum-wage-rates",
+                    "current"
+                  ],
+                  "query": [
+                    {
+                      "key": "stateIds",
+                      "value": "{{stateId}}"
+                    },
+                    {
+                      "key": "skillCategoryIds",
+                      "value": "{{skillCategoryId}}"
+                    },
+                    {
+                      "key": "page",
+                      "value": "0"
+                    },
+                    {
+                      "key": "size",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:22:00Z\",\n    \"traceId\": \"c3d4e5f607182930\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Minimum Wage Rate Filter Options",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/masterdata/minimum-wage-rates/filter-options",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "masterdata",
+                "minimum-wage-rates",
+                "filter-options"
+              ]
+            },
+            "description": "**Permission:** `minimum_wage.view`.\n\nReturns only the states/skill categories actually referenced by at least one minimum wage rate row today - never the full masterdata reference lists. Build the Minimum Wage list's `stateIds`/`skillCategoryIds` filter dropdowns from this endpoint instead of the full `GET /masterdata/states` / skill-category list endpoints. Unpaged - the result set is always small.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `minimum_wage.view` | `ACCESS_DENIED` | 403 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 2xx\", function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test(\"Envelope has success:true\", function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/masterdata/minimum-wage-rates/filter-options",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "masterdata",
+                    "minimum-wage-rates",
+                    "filter-options"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"states\": [\n      {\n        \"id\": \"4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2\",\n        \"name\": \"Rajasthan\",\n        \"code\": \"RJ\"\n      }\n    ],\n    \"skillCategories\": [\n      {\n        \"id\": \"8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a\",\n        \"name\": \"Skilled\"\n      }\n    ]\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/masterdata/minimum-wage-rates/filter-options",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "masterdata",
+                    "minimum-wage-rates",
+                    "filter-options"
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:22:00Z\",\n    \"traceId\": \"c3d4e5f607182930\"\n  }\n}"
             }
           ]
         },

@@ -4,6 +4,7 @@ import in.anytimework.atwbackend.company.api.admin.dto.BulkUpdateCompanyStatusRe
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyAddressRequest;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyAddressResponse;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyExportRequest;
+import in.anytimework.atwbackend.company.api.admin.dto.CompanyFilterOptionsResponse;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyOwnerRef;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyResponse;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyStatusHistoryResponse;
@@ -15,6 +16,7 @@ import in.anytimework.atwbackend.company.api.admin.dto.UpdateCompanyStatusReques
 import in.anytimework.atwbackend.company.application.CompanyAddressInput;
 import in.anytimework.atwbackend.company.application.CompanyAddressService;
 import in.anytimework.atwbackend.company.application.CompanyAddressView;
+import in.anytimework.atwbackend.company.application.CompanyFilterOptionsService;
 import in.anytimework.atwbackend.company.application.CompanyOwnerView;
 import in.anytimework.atwbackend.company.application.CompanySearchCriteria;
 import in.anytimework.atwbackend.company.application.CompanyService;
@@ -82,10 +84,13 @@ public class AdminCompanyController {
 
     private final CompanyService companyService;
     private final CompanyAddressService addressService;
+    private final CompanyFilterOptionsService filterOptionsService;
 
-    public AdminCompanyController(CompanyService companyService, CompanyAddressService addressService) {
+    public AdminCompanyController(CompanyService companyService, CompanyAddressService addressService,
+                                  CompanyFilterOptionsService filterOptionsService) {
         this.companyService = companyService;
         this.addressService = addressService;
+        this.filterOptionsService = filterOptionsService;
     }
 
     @Operation(summary = "List companies", description = """
@@ -124,6 +129,20 @@ public class AdminCompanyController {
         CompanySearchCriteria criteria = new CompanySearchCriteria(status, industryId, search, gstVerified,
                 createdFrom, createdTo, stateId, cityId);
         return ApiResponse.ok(mapPage(companyService.list(criteria, pageable), AdminCompanyController::toSummaryResponse));
+    }
+
+    @Operation(summary = "Scoped company filter options", description = """
+            **Permission:** `company.view`.
+
+            Returns only the industries/states/cities actually referenced by at least one non-deleted \
+            company today - never the full Masterdata reference list. Use this to populate the List \
+            Companies filter dropdowns instead of each masterdata module's own unscoped list endpoint \
+            (e.g. `GET /masterdata/states`), so a dropdown never offers an option that would return \
+            zero companies if selected.""")
+    @GetMapping("/filter-options")
+    @PreAuthorize("@authz.has('company.view')")
+    public ApiResponse<CompanyFilterOptionsResponse> filterOptions() {
+        return ApiResponse.ok(filterOptionsService.get());
     }
 
     @Operation(summary = "Get a company", description = "**Permission:** `company.view`. Full detail "

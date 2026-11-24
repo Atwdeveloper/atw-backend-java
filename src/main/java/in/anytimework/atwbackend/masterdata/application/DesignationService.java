@@ -1,10 +1,12 @@
 package in.anytimework.atwbackend.masterdata.application;
 
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
+import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationIndustryRef;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.UpdateDesignationRequest;
-import in.anytimework.atwbackend.masterdata.application.lookup.IndustrySummary;
 import in.anytimework.atwbackend.masterdata.domain.Designation;
+import in.anytimework.atwbackend.masterdata.domain.DesignationIndustry;
+import in.anytimework.atwbackend.masterdata.domain.DesignationIndustryRepository;
 import in.anytimework.atwbackend.masterdata.domain.DesignationRepository;
 import in.anytimework.atwbackend.masterdata.domain.Industry;
 import in.anytimework.atwbackend.masterdata.domain.IndustryRepository;
@@ -31,7 +33,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -49,17 +52,23 @@ public class DesignationService {
     private static final String IMAGE_CATEGORY = "DESIGNATION_ICON";
     /** Real, directly queryable scalar columns only - see {@link SortValidation}'s Javadoc for why. */
     private static final Set<String> ALLOWED_SORT = Set.of("name", "status", "createdAt");
+    /** Primary first, then alphabetical - matches WorkerService.toResponse's sort for a worker's own designationRefs. */
+    private static final Comparator<DesignationIndustryRef> INDUSTRY_REF_ORDER =
+            Comparator.comparing(DesignationIndustryRef::primary).reversed()
+                    .thenComparing(DesignationIndustryRef::name, String.CASE_INSENSITIVE_ORDER);
 
     private final DesignationRepository designations;
+    private final DesignationIndustryRepository designationIndustries;
     private final IndustryRepository industries;
     private final SkillCategoryRepository skillCategories;
     private final MasterDataImageSupport images;
     private final TransactionTemplate requiresNewTransaction;
 
-    DesignationService(DesignationRepository designations, IndustryRepository industries,
-                        SkillCategoryRepository skillCategories, MasterDataImageSupport images,
-                        PlatformTransactionManager transactionManager) {
+    DesignationService(DesignationRepository designations, DesignationIndustryRepository designationIndustries,
+                        IndustryRepository industries, SkillCategoryRepository skillCategories,
+                        MasterDataImageSupport images, PlatformTransactionManager transactionManager) {
         this.designations = designations;
+        this.designationIndustries = designationIndustries;
         this.industries = industries;
         this.skillCategories = skillCategories;
         this.images = images;
@@ -89,11 +98,13 @@ public class DesignationService {
         // toDto, not a separate list-only projection: image URL resolution is cheap now (the Azure
         // delegation key is cached), so every row gets a resolved imageUrl here too - see get().
         Map<UUID, String> skillCategoryNameById = skillCategoryNameById(page.getContent());
+        Map<UUID, List<DesignationIndustryRef>> industryRefsByDesignationId = industryRefsByDesignationId(page.getContent());
         // Map.of() (the common case: no row on this page has a skill category) throws NPE on get(null)
         // unlike HashMap - d.getSkillCategoryId() is null for most designations, so this null-check
         // can't be folded into the map lookup itself.
         return PageResponse.from(page.map(d -> toDto(d,
-                d.getSkillCategoryId() == null ? null : skillCategoryNameById.get(d.getSkillCategoryId()))));
+                d.getSkillCategoryId() == null ? null : skillCategoryNameById.get(d.getSkillCategoryId()),
+                industryRefsByDesignationId.getOrDefault(d.getId(), List.of()))));
     }
 
     /** Batched counterpart of {@link #skillCategoryNameOf} - one {@code WHERE id IN (...)} for the whole page, not one query per row. */
@@ -116,24 +127,31 @@ public class DesignationService {
         if (designations.existsByName(request.name())) {
             throw new ConflictException("A designation named '" + request.name() + "' already exists.");
         }
-        Set<Industry> resolved = resolveIndustries(request.industryIds());
+        validateIndustrySelection(request.industryIds(), request.primaryIndustryId());
         requireSkillCategoryExistsIfPresent(request.skillCategoryId());
         Designation designation = new Designation(request.name());
-        designation.replaceIndustries(resolved);
         designation.assignSkillCategory(request.skillCategoryId());
-        return toDto(designations.save(designation));
+        designation = designations.save(designation);
+        saveIndustries(designation.getId(), request.industryIds(), request.primaryIndustryId());
+        return toDto(designation);
     }
 
     @Transactional
     public DesignationResponse update(UUID id, UpdateDesignationRequest request) {
-        Designation designation = findOrThrow(id);
+        // Pessimistic lock: serializes this full-replace against a concurrent one for the same
+        // designation - see DesignationRepository.findByIdForUpdate's Javadoc for why a plain
+        // findById isn't enough once uq_designation_industry_primary exists.
+        Designation designation = findOrThrowForUpdate(id);
         if (designations.existsByNameAndIdNot(request.name(), id)) {
             throw new ConflictException("A designation named '" + request.name() + "' already exists.");
         }
-        Set<Industry> resolved = resolveIndustries(request.industryIds());
+        validateIndustrySelection(request.industryIds(), request.primaryIndustryId());
         designation.rename(request.name());
-        designation.replaceIndustries(resolved);
-        return toDto(designations.save(designation));
+        designation = designations.save(designation);
+        designationIndustries.deleteByDesignationId(id);
+        designationIndustries.flush();
+        saveIndustries(id, request.industryIds(), request.primaryIndustryId());
+        return toDto(designation);
     }
 
     /**
@@ -269,19 +287,33 @@ public class DesignationService {
         }
     }
 
-    private Set<Industry> resolveIndustries(Set<UUID> industryIds) {
+    /** industryIds non-empty + all exist, plus primaryIndustryId must be one of them - mirrors WorkerService.validateDesignationSelection's shape. */
+    private void validateIndustrySelection(Set<UUID> industryIds, UUID primaryIndustryId) {
         if (industryIds.isEmpty()) {
             throw new ValidationException("At least one industry must be selected.");
+        }
+        if (!industryIds.contains(primaryIndustryId)) {
+            throw new ValidationException("primaryIndustryId must be one of industryIds.");
         }
         List<Industry> found = industries.findAllById(industryIds);
         if (found.size() != industryIds.size()) {
             throw new ValidationException("One or more selected industries could not be found.");
         }
-        return new HashSet<>(found);
+    }
+
+    private void saveIndustries(UUID designationId, Set<UUID> industryIds, UUID primaryIndustryId) {
+        List<DesignationIndustry> rows = industryIds.stream()
+                .map(industryId -> new DesignationIndustry(designationId, industryId, industryId.equals(primaryIndustryId)))
+                .toList();
+        designationIndustries.saveAll(rows);
     }
 
     private Designation findOrThrow(UUID id) {
         return designations.findById(id).orElseThrow(() -> new ResourceNotFoundException("Designation not found"));
+    }
+
+    private Designation findOrThrowForUpdate(UUID id) {
+        return designations.findByIdForUpdate(id).orElseThrow(() -> new ResourceNotFoundException("Designation not found"));
     }
 
     /** Single-row resolution (get/create/update/...) - only {@link #list} needs the batched {@link #skillCategoryNameById}. */
@@ -292,19 +324,48 @@ public class DesignationService {
     }
 
     private DesignationResponse toDto(Designation designation) {
-        return toDto(designation, skillCategoryNameOf(designation));
+        return toDto(designation, skillCategoryNameOf(designation),
+                industryRefsOf(designationIndustries.findByDesignationId(designation.getId())));
     }
 
-    private DesignationResponse toDto(Designation designation, String skillCategoryName) {
+    private DesignationResponse toDto(Designation designation, String skillCategoryName, List<DesignationIndustryRef> industryRefs) {
         return new DesignationResponse(designation.getId(), designation.getName(), designation.getStatus(),
-                images.urlOrNull(designation.getImageDocumentId()), industrySummariesOf(designation),
+                images.urlOrNull(designation.getImageDocumentId()), industryRefs,
                 designation.getSkillCategoryId(), skillCategoryName);
     }
 
-    private List<IndustrySummary> industrySummariesOf(Designation designation) {
-        return designation.getIndustries().stream()
-                .map(i -> new IndustrySummary(i.getId(), i.getName(), i.getCode()))
-                .sorted((a, b) -> a.name().compareToIgnoreCase(b.name()))
-                .toList();
+    private static DesignationIndustryRef toRef(DesignationIndustry link, Map<UUID, Industry> industryById) {
+        Industry industry = industryById.get(link.getIndustryId());
+        return new DesignationIndustryRef(industry.getId(), industry.getName(), industry.getCode(), link.isPrimary());
+    }
+
+    /** Single-row resolution - resolves just this one designation's own links' industries, nothing batched. */
+    private List<DesignationIndustryRef> industryRefsOf(List<DesignationIndustry> links) {
+        if (links.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> industryIds = links.stream().map(DesignationIndustry::getIndustryId).collect(Collectors.toSet());
+        Map<UUID, Industry> industryById = industries.findAllById(industryIds).stream()
+                .collect(Collectors.toMap(Industry::getId, i -> i));
+        return links.stream().map(link -> toRef(link, industryById)).sorted(INDUSTRY_REF_ORDER).toList();
+    }
+
+    /** Batched counterpart of {@link #industryRefsOf} - one {@code WHERE designation_id IN (...)} and one {@code WHERE industry_id IN (...)} for the whole page, not one query per row. */
+    private Map<UUID, List<DesignationIndustryRef>> industryRefsByDesignationId(List<Designation> rows) {
+        Set<UUID> designationIds = rows.stream().map(Designation::getId).collect(Collectors.toSet());
+        if (designationIds.isEmpty()) {
+            return Map.of();
+        }
+        List<DesignationIndustry> links = designationIndustries.findByDesignationIdIn(designationIds);
+        Set<UUID> industryIds = links.stream().map(DesignationIndustry::getIndustryId).collect(Collectors.toSet());
+        Map<UUID, Industry> industryById = industries.findAllById(industryIds).stream()
+                .collect(Collectors.toMap(Industry::getId, i -> i));
+        Map<UUID, List<DesignationIndustryRef>> result = new HashMap<>();
+        for (Map.Entry<UUID, List<DesignationIndustry>> entry
+                : links.stream().collect(Collectors.groupingBy(DesignationIndustry::getDesignationId)).entrySet()) {
+            result.put(entry.getKey(), entry.getValue().stream()
+                    .map(link -> toRef(link, industryById)).sorted(INDUSTRY_REF_ORDER).toList());
+        }
+        return result;
     }
 }

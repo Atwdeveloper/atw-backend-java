@@ -17,8 +17,10 @@ import java.util.UUID;
  * One account per worker for now (legacy allowed several with an app-only "is primary" flag and no DB
  * guarantee of exactly one) - a deliberate simplification, not a dropped requirement; revisit if
  * multi-account is a real, confirmed need. The account number is encrypted at rest
- * ({@link WorkerEncryptedStringConverter}); holder name/bank name/IFSC/branch aren't secret enough to
- * need it - same split as {@code AdminUserBankDetail}.
+ * ({@link WorkerEncryptedStringConverter}); holder name/bank name/IFSC aren't secret enough to need it
+ * - same split as {@code AdminUserBankDetail}. (A {@code branchName} free-text column existed here
+ * too until it was removed - redundant with {@code ifscCode}, which alone uniquely identifies the
+ * branch in India's banking system.)
  */
 @Getter
 @Entity
@@ -41,9 +43,6 @@ public class WorkerBankDetail extends BaseEntity {
     @Column(name = "ifsc_code", length = 15)
     private String ifscCode;
 
-    @Column(name = "branch_name", length = 150)
-    private String branchName;
-
     @Column(name = "is_verified", nullable = false)
     private boolean verified;
 
@@ -59,12 +58,11 @@ public class WorkerBankDetail extends BaseEntity {
         this.verified = false;
     }
 
-    public void update(String accountHolderName, String bankName, String accountNumber, String ifscCode, String branchName) {
+    public void update(String accountHolderName, String bankName, String accountNumber, String ifscCode) {
         this.accountHolderName = accountHolderName;
         this.bankName = bankName;
         this.accountNumber = accountNumber;
         this.ifscCode = ifscCode;
-        this.branchName = branchName;
         // Any change to the account details invalidates a prior verification - must be re-verified.
         this.verified = false;
         this.verifiedAt = null;

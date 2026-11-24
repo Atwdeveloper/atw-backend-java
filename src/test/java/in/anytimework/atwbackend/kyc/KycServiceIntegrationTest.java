@@ -8,13 +8,10 @@ import in.anytimework.atwbackend.kyc.application.dto.AadhaarOtpChallengeDto;
 import in.anytimework.atwbackend.kyc.application.dto.AadhaarVerificationResultDto;
 import in.anytimework.atwbackend.kyc.application.dto.KycProfileDto;
 import in.anytimework.atwbackend.kyc.application.dto.MobileOtpChallengeDto;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.DepartmentResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
-import in.anytimework.atwbackend.masterdata.application.DepartmentService;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.notification.CapturingSmsSender;
@@ -68,15 +65,13 @@ class KycServiceIntegrationTest {
     @Autowired
     private WorkerService workerService;
     @Autowired
-    private DepartmentService departmentService;
-    @Autowired
     private IndustryService industryService;
     @Autowired
     private DesignationService designationService;
     @Autowired
     private CapturingSmsSender smsSender;
 
-    private record TestMasterData(UUID departmentId, UUID designationId) {
+    private record TestMasterData(UUID designationId) {
     }
 
     private static String unique() {
@@ -118,17 +113,16 @@ class KycServiceIntegrationTest {
     }
 
     private TestMasterData setupMasterData() {
-        DepartmentResponse department = departmentService.create(new CreateDepartmentRequest("Dept " + unique()));
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
         DesignationResponse designation = designationService.create(
-                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
-        return new TestMasterData(department.id(), designation.id());
+                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), industry.id(), null));
+        return new TestMasterData(designation.id());
     }
 
     private UUID createWorker() {
         TestMasterData md = setupMasterData();
         WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null,
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
+                Gender.MALE, null, uniqueMobile(), null, null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of()));
         return worker.id();
     }
@@ -136,7 +130,7 @@ class KycServiceIntegrationTest {
     private WorkerResponse createWorkerWithAadhaarVerification(UUID verificationId) {
         TestMasterData md = setupMasterData();
         return workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null,
-                Gender.MALE, null, uniqueMobile(), null, md.departmentId(), null, null,
+                Gender.MALE, null, uniqueMobile(), null, null, null,
                 Set.of(md.designationId()), md.designationId(), Set.of(), verificationId));
     }
 

@@ -32,8 +32,6 @@ public record WorkerResponse(
         LocalDate dateOfBirth,
         String mobileNumber,
         String personalEmail,
-        @Schema(description = "Id of the worker's department (Masterdata module), or null if not set.",
-                example = "1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d", nullable = true) UUID departmentId,
         @Schema(description = "Id of the worker's industry (Masterdata module), or null if not set.",
                 example = "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", nullable = true) UUID industryId,
         @Schema(description = "Optional, self-reported years of prior work experience, or null if not given.",

@@ -22,6 +22,7 @@ import in.anytimework.atwbackend.worker.api.admin.dto.UpdateWorkerStatusRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerAddressResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerBankDetailResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerExportRequest;
+import in.anytimework.atwbackend.worker.api.admin.dto.WorkerFilterOptionsResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerNoteResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerResponse;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerStatusHistoryResponse;
@@ -31,6 +32,7 @@ import in.anytimework.atwbackend.worker.api.admin.dto.SubmitWorkerEsicRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.SubmitWorkerUanRequest;
 import in.anytimework.atwbackend.worker.application.WorkerAddressService;
 import in.anytimework.atwbackend.worker.application.WorkerBankDetailService;
+import in.anytimework.atwbackend.worker.application.WorkerFilterOptionsService;
 import in.anytimework.atwbackend.worker.application.WorkerNoteService;
 import in.anytimework.atwbackend.worker.application.WorkerSearchCriteria;
 import in.anytimework.atwbackend.worker.application.WorkerService;
@@ -93,15 +95,18 @@ public class AdminWorkerController {
     private final WorkerBankDetailService bankDetailService;
     private final WorkerStatutoryDetailService statutoryDetailService;
     private final WorkerNoteService noteService;
+    private final WorkerFilterOptionsService filterOptionsService;
 
     public AdminWorkerController(WorkerService workerService, WorkerAddressService addressService,
                                  WorkerBankDetailService bankDetailService,
-                                 WorkerStatutoryDetailService statutoryDetailService, WorkerNoteService noteService) {
+                                 WorkerStatutoryDetailService statutoryDetailService, WorkerNoteService noteService,
+                                 WorkerFilterOptionsService filterOptionsService) {
         this.workerService = workerService;
         this.addressService = addressService;
         this.bankDetailService = bankDetailService;
         this.statutoryDetailService = statutoryDetailService;
         this.noteService = noteService;
+        this.filterOptionsService = filterOptionsService;
     }
 
     private static final String EX_WORKER_ACTIVE = """
@@ -117,7 +122,6 @@ public class AdminWorkerController {
                 "dateOfBirth": "1995-08-15",
                 "mobileNumber": "9876543210",
                 "personalEmail": "ramesh.kumar@example.com",
-                "departmentId": "1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d",
                 "industryId": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c",
                 "status": "ACTIVE",
                 "statusReason": null,
@@ -161,7 +165,6 @@ public class AdminWorkerController {
                 "dateOfBirth": "1995-08-15",
                 "mobileNumber": "9876543210",
                 "personalEmail": "ramesh.kumar@example.com",
-                "departmentId": "1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d",
                 "industryId": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c",
                 "status": "REGISTERED",
                 "statusReason": null,
@@ -193,7 +196,6 @@ public class AdminWorkerController {
                 "dateOfBirth": "1995-08-15",
                 "mobileNumber": "9876543210",
                 "personalEmail": "ramesh.kumar@example.com",
-                "departmentId": "1a2b3c4d-5e6f-4a8b-9c1d-2e3f4a5b6c7d",
                 "industryId": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c",
                 "status": "SUSPENDED",
                 "statusReason": "Failed a random KYC re-verification check",
@@ -256,6 +258,20 @@ public class AdminWorkerController {
                 "totalPages": 1,
                 "first": true,
                 "last": true
+              },
+              "error": null
+            }
+            """;
+
+    private static final String EX_WORKER_FILTER_OPTIONS = """
+            {
+              "success": true,
+              "data": {
+                "industries": [ { "id": "6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c", "name": "Construction", "code": "IND0000001" } ],
+                "designations": [ { "id": "7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e", "name": "Mason" } ],
+                "skills": [ { "id": "9d0e1f2a-3b4c-4d5e-8f6a-7b8c9d0e1f2a", "name": "Wall Plastering", "designationId": "7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e" } ],
+                "states": [ { "id": "4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2", "name": "Rajasthan", "code": "RJ" } ],
+                "cities": [ { "id": "9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01", "name": "Jaipur" } ]
               },
               "error": null
             }
@@ -381,7 +397,6 @@ public class AdminWorkerController {
                 "bankName": "State Bank of India",
                 "accountNumber": "**********5678",
                 "ifscCode": "SBIN0001234",
-                "branchName": "Jaipur Civil Lines Branch",
                 "verified": false,
                 "verifiedAt": null
               },
@@ -622,7 +637,6 @@ public class AdminWorkerController {
             batch-resolved display name (e.g. `primaryDesignationName`), since those aren't columns on \
             this table at all.""")
     @Parameter(name = "status", description = "Filter by one or more lifecycle statuses.")
-    @Parameter(name = "departmentId", description = "Filter by one or more department ids (Masterdata module).")
     @Parameter(name = "industryId", description = "Filter by one or more industry ids (Masterdata module).")
     @Parameter(name = "designationId", description = "Filter by one or more designation ids - matches a worker holding ANY of these (primary or not).")
     @Parameter(name = "skillId", description = "Filter by one or more skill ids.")
@@ -632,6 +646,7 @@ public class AdminWorkerController {
     @Parameter(name = "registeredTo", description = "Registered (created) on or before this date (UTC).", example = "2026-12-31")
     @Parameter(name = "stateId", description = "Filter by one or more state ids (Masterdata module) - matches a worker whose PERMANENT or CURRENT address references any of these.")
     @Parameter(name = "cityId", description = "Filter by one or more city ids (Masterdata module) - matches a worker whose PERMANENT or CURRENT address references any of these.")
+    @Parameter(name = "faceEnrolled", description = "true = only workers with a face enrollment on file; false = only those without; omitted = no filter.")
     @Parameter(name = "sort", description = "Allowed values: firstName, lastName, workerCode, mobileNumber, status, createdAt. Default: createdAt,desc.", example = "createdAt,desc")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Page of workers.",
             content = @Content(schema = @Schema(implementation = WorkerSummaryResponse.class),
@@ -642,7 +657,6 @@ public class AdminWorkerController {
     @PreAuthorize("@authz.has('workers.view')")
     public ApiResponse<PageResponse<WorkerSummaryResponse>> list(
             @RequestParam(required = false) Set<WorkerStatus> status,
-            @RequestParam(required = false) Set<UUID> departmentId,
             @RequestParam(required = false) Set<UUID> industryId,
             @RequestParam(required = false) Set<UUID> designationId,
             @RequestParam(required = false) Set<UUID> skillId,
@@ -652,11 +666,29 @@ public class AdminWorkerController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate registeredTo,
             @RequestParam(required = false) Set<UUID> stateId,
             @RequestParam(required = false) Set<UUID> cityId,
+            @RequestParam(required = false) Boolean faceEnrolled,
             @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         WorkerSearchCriteria criteria = new WorkerSearchCriteria(
-                status, departmentId, industryId, designationId, skillId, kycStatus, search, registeredFrom, registeredTo,
-                stateId, cityId);
+                status, industryId, designationId, skillId, kycStatus, search, registeredFrom, registeredTo,
+                stateId, cityId, faceEnrolled);
         return ApiResponse.ok(workerService.list(criteria, pageable));
+    }
+
+    @Operation(summary = "Scoped worker filter options", description = """
+            **Permission:** `workers.view`.
+
+            Returns only the industries/designations/skills/states/cities actually referenced by at \
+            least one non-deleted worker today - never the full Masterdata reference list. Use this to \
+            populate the List Workers filter dropdowns instead of each masterdata module's own \
+            unscoped list endpoint (e.g. `GET /masterdata/states`), so a dropdown never offers an \
+            option that would return zero workers if selected.""")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Scoped filter options.",
+            content = @Content(schema = @Schema(implementation = WorkerFilterOptionsResponse.class),
+                    examples = @ExampleObject(value = EX_WORKER_FILTER_OPTIONS)))
+    @GetMapping("/filter-options")
+    @PreAuthorize("@authz.has('workers.view')")
+    public ApiResponse<WorkerFilterOptionsResponse> filterOptions() {
+        return ApiResponse.ok(filterOptionsService.get());
     }
 
     @Operation(summary = "Get a worker", description = """
@@ -689,12 +721,11 @@ public class AdminWorkerController {
 
             **Validation, checked in this order:**
             1. `mobileNumber` must be unique among active (non-deleted) workers.
-            2. `departmentId` must reference an existing department.
-            3. `industryId`, when given, must reference an existing industry.
-            4. `designationIds` - 1 to 3 ids, every one must exist, and `primaryDesignationId` must be \
+            2. `industryId`, when given, must reference an existing industry.
+            3. `designationIds` - 1 to 3 ids, every one must exist, and `primaryDesignationId` must be \
             one of them.
-            5. `skillIds` - each must belong to one of the selected `designationIds`.
-            6. `aadhaarVerificationId`, when given, must reference a verification that is `VERIFIED` and \
+            4. `skillIds` - each must belong to one of the selected `designationIds`.
+            5. `aadhaarVerificationId`, when given, must reference a verification that is `VERIFIED` and \
             not already consumed; the whole creation fails otherwise (rolled back, no worker is left \
             behind).""")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Worker created.",
@@ -714,10 +745,10 @@ public class AdminWorkerController {
     @Operation(summary = "Update a worker's profile", description = """
             **Permission:** `workers.edit`.
 
-            Replaces the worker's core profile fields (name, gender, DOB, mobile, email, department, \
-            industry). Designations/skills are untouched - use the dedicated assignment endpoints below. \
-            Same `mobileNumber` uniqueness and `departmentId`/`industryId` existence checks as Create, \
-            excluding this worker's own current row.""")
+            Replaces the worker's core profile fields (name, gender, DOB, mobile, email, industry). \
+            Designations/skills are untouched - use the dedicated assignment endpoints below. Same \
+            `mobileNumber` uniqueness and `industryId` existence check as Create, excluding this \
+            worker's own current row.""")
     @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Updated worker.",
             content = @Content(schema = @Schema(implementation = WorkerResponse.class),
@@ -861,7 +892,7 @@ public class AdminWorkerController {
             **Returns a raw `.xlsx` file download (`Content-Disposition: attachment`), NOT the usual \
             JSON envelope** - this is the only endpoint on this controller that doesn't return \
             `ApiResponse`. Columns, in order: Worker Code, First Name, Last Name, Mobile Number, Status, \
-            KYC Status, Designation (primary designation's display name, blank if none), Department, \
+            KYC Status, Designation (primary designation's display name, blank if none), \
             Current City, Current State, Permanent City, Permanent State (blank if that address/field \
             isn't on file), Face Enrolled (`Yes`/`No`).
 
@@ -879,9 +910,9 @@ public class AdminWorkerController {
     @PostMapping("/export")
     @PreAuthorize("@authz.has('workers.export')")
     public ResponseEntity<byte[]> export(@RequestBody WorkerExportRequest request) {
-        WorkerSearchCriteria criteria = new WorkerSearchCriteria(request.status(), request.departmentId(),
+        WorkerSearchCriteria criteria = new WorkerSearchCriteria(request.status(),
                 request.industryId(), request.designationId(), request.skillId(), request.kycStatus(), request.search(),
-                request.registeredFrom(), request.registeredTo(), request.stateId(), request.cityId());
+                request.registeredFrom(), request.registeredTo(), request.stateId(), request.cityId(), request.faceEnrolled());
         byte[] xlsx = workerService.exportToExcel(request.ids(), criteria);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))

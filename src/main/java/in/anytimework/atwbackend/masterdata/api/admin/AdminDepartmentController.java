@@ -226,21 +226,15 @@ public class AdminDepartmentController {
     @Operation(summary = "Delete a department", description = """
             Permission: `department.delete`.
 
-            A real, hard delete - not a status flip. Guarded by the existing \
-            `worker.department_id REFERENCES department(id) ON DELETE RESTRICT` foreign key: deleting a \
-            department that still has one or more workers assigned to it is rejected with a friendly 409, not a \
-            raw database error. Reassign those workers (or deactivate the department instead via \
-            `POST /{id}/status`) before retrying the delete.""")
+            A real, hard delete - not a status flip. Nothing references a department by foreign key \
+            (worker's own department field was removed entirely), so this cannot fail with a conflict.""")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Department deleted",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "success": true, "data": null, "error": null }"""))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Unknown department id",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
-                            { "success": false, "data": null, "error": { "code": "RESOURCE_NOT_FOUND", "message": "Department not found", "fieldErrors": null, "timestamp": "2026-11-01T10:00:00Z", "traceId": "a1b2c3d4e5f60718" } }"""))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "Still referenced by one or more workers",
-                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = """
-                            { "success": false, "data": null, "error": { "code": "CONFLICT", "message": "Cannot delete this department because one or more workers are currently assigned to it. Reassign those workers to a different department first, or deactivate it instead.", "fieldErrors": null, "timestamp": "2026-11-01T10:00:00Z", "traceId": "a1b2c3d4e5f60718" } }""")))
+                            { "success": false, "data": null, "error": { "code": "RESOURCE_NOT_FOUND", "message": "Department not found", "fieldErrors": null, "timestamp": "2026-11-01T10:00:00Z", "traceId": "a1b2c3d4e5f60718" } }""")))
     })
     public ApiResponse<Void> delete(@Parameter(description = "Department id.", required = true) @PathVariable UUID id) {
         departmentService.delete(id);
@@ -264,7 +258,7 @@ public class AdminDepartmentController {
                               "success": true,
                               "data": {
                                 "successCount": 1,
-                                "failures": [ { "id": "2b3c4d5e-6f7a-4b9c-8d2e-3f4a5b6c7d8e", "reason": "Cannot delete this department because one or more workers are currently assigned to it. Reassign those workers to a different department first, or deactivate it instead." } ]
+                                "failures": [ { "id": "2b3c4d5e-6f7a-4b9c-8d2e-3f4a5b6c7d8e", "reason": "Not found" } ]
                               },
                               "error": null
                             }"""))),

@@ -1,16 +1,13 @@
 package in.anytimework.atwbackend.masterdata;
 
 import in.anytimework.atwbackend.document.FileStorageTestConfig;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateSkillRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.DepartmentResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.SkillResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.UpdateSkillRequest;
-import in.anytimework.atwbackend.masterdata.application.DepartmentService;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.masterdata.application.SkillSearchCriteria;
@@ -54,8 +51,6 @@ class SkillAdminIntegrationTest {
     @Autowired
     private IndustryService industryService;
     @Autowired
-    private DepartmentService departmentService;
-    @Autowired
     private WorkerService workerService;
 
     private static String unique() {
@@ -68,14 +63,13 @@ class SkillAdminIntegrationTest {
 
     private DesignationResponse createDesignation(String label) {
         IndustryResponse industry = industryService.create(new CreateIndustryRequest(label + " Industry " + unique()));
-        return designationService.create(new CreateDesignationRequest(label + " " + unique(), Set.of(industry.id()), null));
+        return designationService.create(new CreateDesignationRequest(label + " " + unique(), Set.of(industry.id()), industry.id(), null));
     }
 
     /** A worker holding {@code skillId} (under {@code designationId}) - exists purely to exercise the delete-guard tests below. */
     private void createWorkerWithSkill(UUID designationId, UUID skillId) {
-        DepartmentResponse department = departmentService.create(new CreateDepartmentRequest("Dept " + unique()));
         workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(), null, Gender.MALE, null,
-                uniqueMobile(), null, department.id(), null, null, Set.of(designationId), designationId, Set.of(skillId)));
+                uniqueMobile(), null, null, null, Set.of(designationId), designationId, Set.of(skillId)));
     }
 
     @Test

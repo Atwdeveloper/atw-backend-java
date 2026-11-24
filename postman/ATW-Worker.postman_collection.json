@@ -110,6 +110,106 @@
           ]
         },
         {
+          "name": "Worker Filter Options",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/workers/filter-options",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "workers",
+                "filter-options"
+              ]
+            },
+            "description": "**Permission:** `workers.view`.\n\nReturns only the industries/designations/skills/states/cities actually referenced by at least one non-deleted worker today - never the full Masterdata reference list. Use this to populate the List Workers filter dropdowns instead of each masterdata module's own unscoped list endpoint, so a dropdown never offers an option that would return zero workers if selected.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Caller lacks `workers.view` | `ACCESS_DENIED` | 403 |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 2xx\", function () {",
+                  "  pm.response.to.be.success;",
+                  "});",
+                  "pm.test(\"Envelope has success:true\", function () {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 - OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/filter-options",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "filter-options"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"industries\": [\n      {\n        \"id\": \"6f5e4d3c-2b1a-4f8e-9d7c-6b5a4f3e2d1c\",\n        \"name\": \"Construction\",\n        \"code\": \"IND0000001\"\n      }\n    ],\n    \"designations\": [\n      {\n        \"id\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\",\n        \"name\": \"Mason\"\n      }\n    ],\n    \"skills\": [\n      {\n        \"id\": \"9d0e1f2a-3b4c-4d5e-8f6a-7b8c9d0e1f2a\",\n        \"name\": \"Wall Plastering\",\n        \"designationId\": \"7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e\"\n      }\n    ],\n    \"states\": [\n      {\n        \"id\": \"4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2\",\n        \"name\": \"Rajasthan\",\n        \"code\": \"RJ\"\n      }\n    ],\n    \"cities\": [\n      {\n        \"id\": \"9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01\",\n        \"name\": \"Jaipur\"\n      }\n    ]\n  },\n  \"error\": null\n}"
+            },
+            {
+              "name": "403 - Missing permission",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/admin/workers/filter-options",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "workers",
+                    "filter-options"
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"data\": null,\n  \"error\": {\n    \"code\": \"ACCESS_DENIED\",\n    \"message\": \"You do not have permission to perform this action\",\n    \"fieldErrors\": null,\n    \"timestamp\": \"2026-10-24T10:22:00Z\",\n    \"traceId\": \"c3d4e5f607182930\"\n  }\n}"
+            }
+          ]
+        },
+        {
           "name": "Get Worker",
           "request": {
             "method": "GET",

@@ -23,7 +23,6 @@ public record WorkerExportRequest(
         @Schema(description = "Exact set of worker ids to export. When given and non-empty, every "
                 + "filter field below is ignored.", nullable = true) Set<UUID> ids,
         @Schema(nullable = true) Set<WorkerStatus> status,
-        @Schema(description = "Department ids (Masterdata module).", nullable = true) Set<UUID> departmentId,
         @Schema(description = "Industry ids (Masterdata module).", nullable = true) Set<UUID> industryId,
         @Schema(description = "Designation ids (Masterdata module).", nullable = true) Set<UUID> designationId,
         @Schema(description = "Skill ids (Masterdata module).", nullable = true) Set<UUID> skillId,
@@ -38,6 +37,8 @@ public record WorkerExportRequest(
         @Schema(description = "State ids (Masterdata module). Matches a worker whose PERMANENT or "
                 + "CURRENT address references any of these.", nullable = true) Set<UUID> stateId,
         @Schema(description = "City ids (Masterdata module). Matches a worker whose PERMANENT or "
-                + "CURRENT address references any of these.", nullable = true) Set<UUID> cityId
+                + "CURRENT address references any of these.", nullable = true) Set<UUID> cityId,
+        @Schema(description = "true = only workers with a face enrollment on file; false = only those "
+                + "without; omitted = no filter.", nullable = true) Boolean faceEnrolled
 ) {
 }

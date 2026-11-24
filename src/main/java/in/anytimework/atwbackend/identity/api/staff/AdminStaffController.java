@@ -1,5 +1,6 @@
 package in.anytimework.atwbackend.identity.api.staff;
 
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffFilterOptionsResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycResponse;
@@ -14,6 +15,7 @@ import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAdminStaffRequest;
 import in.anytimework.atwbackend.identity.api.staff.dto.UpdateAdminStaffStatusRequest;
 import in.anytimework.atwbackend.identity.application.AdminStaffAddressService;
 import in.anytimework.atwbackend.identity.application.AdminStaffBankDetailService;
+import in.anytimework.atwbackend.identity.application.AdminStaffFilterOptionsService;
 import in.anytimework.atwbackend.identity.application.AdminStaffKycService;
 import in.anytimework.atwbackend.identity.application.AdminStaffProfileService;
 import in.anytimework.atwbackend.identity.application.AdminStaffSearchCriteria;
@@ -82,15 +84,18 @@ public class AdminStaffController {
     private final AdminStaffAddressService addressService;
     private final AdminStaffKycService kycService;
     private final AdminStaffBankDetailService bankDetailService;
+    private final AdminStaffFilterOptionsService filterOptionsService;
 
     public AdminStaffController(AdminStaffService staffService, AdminStaffProfileService profileService,
                            AdminStaffAddressService addressService, AdminStaffKycService kycService,
-                           AdminStaffBankDetailService bankDetailService) {
+                           AdminStaffBankDetailService bankDetailService,
+                           AdminStaffFilterOptionsService filterOptionsService) {
         this.staffService = staffService;
         this.profileService = profileService;
         this.addressService = addressService;
         this.kycService = kycService;
         this.bankDetailService = bankDetailService;
+        this.filterOptionsService = filterOptionsService;
     }
 
     @GetMapping
@@ -175,6 +180,31 @@ public class AdminStaffController {
             Pageable pageable) {
         return ApiResponse.ok(staffService.list(
                 new AdminStaffSearchCriteria(status, roleId, superAdmin, search, stateId, cityId), pageable));
+    }
+
+    @GetMapping("/filter-options")
+    @PreAuthorize("@authz.has('admin_staff.view')")
+    @Operation(summary = "Scoped filter-dropdown options for the staff list",
+            description = "Returns only the states/cities/roles actually referenced by at least one staff "
+                    + "account today - e.g. if staff addresses only ever reference 2 states, `states` here "
+                    + "contains exactly those 2, not every state in the Masterdata > Geography catalog. Build "
+                    + "the staff list's `stateId`/`cityId`/`roleId` filter dropdowns from this endpoint instead "
+                    + "of the full masterdata/role list endpoints. Unpaged - the result set is always small.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Scoped filter options.",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            {
+                              "success": true,
+                              "data": {
+                                "states": [{ "id": "4b2f8e1a-6c3d-4f9a-9e21-7a5d3c8f10b2", "name": "Rajasthan" }],
+                                "cities": [{ "id": "9d4e2a7c-1f6b-4c8d-8a3e-2b7f9c4d6e01", "name": "Jaipur" }],
+                                "roles": [{ "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "name": "Senior Developer" }]
+                              },
+                              "error": null
+                            }""")))
+    })
+    public ApiResponse<AdminStaffFilterOptionsResponse> filterOptions() {
+        return ApiResponse.ok(filterOptionsService.get());
     }
 
     @GetMapping("/{id}")

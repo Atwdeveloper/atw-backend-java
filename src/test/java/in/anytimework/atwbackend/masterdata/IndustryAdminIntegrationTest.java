@@ -237,7 +237,7 @@ class IndustryAdminIntegrationTest {
     @Test
     void delete_anIndustryStillAssignedToADesignation_isRejectedWithAClearMessage() {
         IndustryResponse created = industryService.create(new CreateIndustryRequest("InUse " + unique()));
-        designationService.create(new CreateDesignationRequest("Role " + unique(), Set.of(created.id()), null));
+        designationService.create(new CreateDesignationRequest("Role " + unique(), Set.of(created.id()), created.id(), null));
 
         assertThatThrownBy(() -> industryService.delete(created.id()))
                 .isInstanceOf(ConflictException.class)
@@ -251,7 +251,7 @@ class IndustryAdminIntegrationTest {
     void bulkDelete_partialSuccess_deletesTheFreeOneAndReportsTheBlockedOneWithoutLosingData() {
         IndustryResponse deletable = industryService.create(new CreateIndustryRequest("BulkDel1 " + unique()));
         IndustryResponse blocked = industryService.create(new CreateIndustryRequest("BulkDel2 " + unique()));
-        designationService.create(new CreateDesignationRequest("Role " + unique(), Set.of(blocked.id()), null));
+        designationService.create(new CreateDesignationRequest("Role " + unique(), Set.of(blocked.id()), blocked.id(), null));
 
         BulkActionResult result = industryService.bulkDelete(Set.of(deletable.id(), blocked.id()));
 

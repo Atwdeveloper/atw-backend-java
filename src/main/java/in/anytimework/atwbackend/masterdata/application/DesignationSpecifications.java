@@ -1,7 +1,9 @@
 package in.anytimework.atwbackend.masterdata.application;
 
 import in.anytimework.atwbackend.masterdata.domain.Designation;
+import in.anytimework.atwbackend.masterdata.domain.DesignationIndustry;
 import in.anytimework.atwbackend.shared.kernel.ActiveStatus;
+import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.jpa.domain.Specification;
 
 import java.util.Locale;
@@ -12,12 +14,11 @@ import java.util.UUID;
  * Dynamic multiselect filtering for the admin designation list, same shape as
  * {@code DepartmentSpecifications}.
  *
- * <p>{@code hasIndustries} joins through {@link Designation#getIndustries()} - a genuinely navigable
- * {@code @ManyToMany}, unlike {@code WorkerDesignation}/{@code WorkerSkill} (which have no mapped
- * entity of their own to subquery against, see {@code WorkerSpecifications}) - so the join is the
- * natural approach here. The query is marked {@code distinct}: without it, a designation belonging to
- * more than one of the selected industry ids would come back once per matching industry, inflating
- * both the page content and {@code totalElements}.</p>
+ * <p>{@code hasIndustries} is an uncorrelated subquery against {@link DesignationIndustry} - the same
+ * technique {@code WorkerSpecifications.hasDesignation}/{@code hasSkill} already use for a
+ * no-mapped-entity-of-its-own-to-join-against relationship. A subquery also means no fan-out (a
+ * designation matching 2+ selected industry ids still returns exactly one row), so unlike the old
+ * {@code @ManyToMany}-join version this predicate needs no {@code query.distinct(true)}.</p>
  */
 final class DesignationSpecifications {
 
@@ -26,8 +27,11 @@ final class DesignationSpecifications {
 
     static Specification<Designation> hasIndustries(Set<UUID> industryIds) {
         return (root, query, cb) -> {
-            query.distinct(true);
-            return root.join("industries").get("id").in(industryIds);
+            Subquery<UUID> subquery = query.subquery(UUID.class);
+            var designationIndustry = subquery.from(DesignationIndustry.class);
+            subquery.select(designationIndustry.get("designationId"))
+                    .where(designationIndustry.get("industryId").in(industryIds));
+            return root.get("id").in(subquery);
         };
     }
 

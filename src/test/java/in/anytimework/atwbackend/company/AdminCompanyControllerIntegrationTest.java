@@ -5,6 +5,7 @@ import in.anytimework.atwbackend.company.api.admin.dto.BulkUpdateCompanyStatusRe
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyAddressRequest;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyAddressResponse;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyExportRequest;
+import in.anytimework.atwbackend.company.api.admin.dto.CompanyFilterOptionsResponse;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyResponse;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanyStatusHistoryResponse;
 import in.anytimework.atwbackend.company.api.admin.dto.CompanySummaryResponse;
@@ -20,11 +21,19 @@ import in.anytimework.atwbackend.company.domain.CompanyUser;
 import in.anytimework.atwbackend.company.domain.CompanyUserRepository;
 import in.anytimework.atwbackend.company.domain.CompanyUserRole;
 import in.anytimework.atwbackend.company.domain.CompanyUserStatus;
+import in.anytimework.atwbackend.company.application.CompanyFilterOptionsService;
 import in.anytimework.atwbackend.identity.domain.AdminUser;
 import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
+import in.anytimework.atwbackend.masterdata.application.lookup.CitySummary;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
+import in.anytimework.atwbackend.masterdata.application.lookup.IndustrySummary;
+import in.anytimework.atwbackend.masterdata.application.lookup.StateSummary;
+import in.anytimework.atwbackend.masterdata.domain.City;
+import in.anytimework.atwbackend.masterdata.domain.CityRepository;
+import in.anytimework.atwbackend.masterdata.domain.State;
+import in.anytimework.atwbackend.masterdata.domain.StateRepository;
 import in.anytimework.atwbackend.shared.api.BulkActionFailure;
 import in.anytimework.atwbackend.shared.api.BulkActionResult;
 import in.anytimework.atwbackend.shared.api.BulkIdsRequest;
@@ -54,6 +63,7 @@ import org.springframework.test.context.ActiveProfiles;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -92,6 +102,12 @@ class AdminCompanyControllerIntegrationTest {
     private JdbcTemplate jdbcTemplate;
     @Autowired
     private GeographyLookupService geography;
+    @Autowired
+    private CompanyFilterOptionsService filterOptionsService;
+    @Autowired
+    private StateRepository states;
+    @Autowired
+    private CityRepository cities;
 
     private static String unique() {
         return UUID.randomUUID().toString().substring(0, 8);
@@ -283,7 +299,13 @@ class AdminCompanyControllerIntegrationTest {
         CreateCompanyRequest request = new CreateCompanyRequest(marker + " Co", createIndustry(), null, null,
                 List.of(), "Owner", "owner-" + unique() + "@example.com", null);
         CompanyResponse created = controller.create(request).data();
-        LocalDate today = LocalDate.now();
+        // CompanySpecifications.createdBetween deliberately interprets createdFrom/createdTo as whole
+        // calendar days in UTC (see its own Javadoc, "same semantics as
+        // WorkerSpecifications.registeredBetween") - a bare LocalDate.now() uses the JVM's default
+        // zone instead, which disagrees with UTC for part of every day; pin "today" to UTC to match
+        // what the filter under test actually compares against (hit for real once the wall-clock date
+        // rolled over mid-session - see the identical fix in WorkerBulkOperationsIntegrationTest).
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
 
         PageResponse<CompanySummaryResponse> withinRange = controller
                 .list(null, null, marker, null, today, today, null, null, PageRequest.of(0, 20)).data();
@@ -296,6 +318,41 @@ class AdminCompanyControllerIntegrationTest {
         PageResponse<CompanySummaryResponse> afterCreation = controller
                 .list(null, null, marker, null, today.plusDays(1), null, null, null, PageRequest.of(0, 20)).data();
         assertThat(afterCreation.content()).isEmpty();
+    }
+
+    // ---- filter-options: scoped values only ----------------------------------------------------
+
+    /**
+     * Proves actual scoping, not just "the endpoint returns something": a freshly created, never
+     * referenced state/city/industry must NOT appear, while one actually assigned to a company must.
+     * Unlike the state/city list() filter tests below (which can safely reuse a SEEDED state because
+     * they're also scoped by a unique company-name search term), filter-options has no search
+     * parameter at all - it scans every company unfiltered - so proving the negative case here
+     * requires a genuinely fresh, never-before-used state/city (same technique and reasoning as
+     * {@code AdminStaffRoleIntegrationTest.staffFilterOptions_onlyIncludesValuesActuallyReferencedByAStaffMember}).
+     */
+    @Test
+    void companyFilterOptions_onlyIncludesValuesActuallyReferencedByACompany() {
+        State referencedState = states.save(new State("FilterOptState " + unique(), unique().toUpperCase()));
+        City referencedCity = cities.save(new City(referencedState.getId(), "FilterOptCity " + unique()));
+        State unreferencedState = states.save(new State("UnusedFilterOptState " + unique(), unique().toUpperCase()));
+        City unreferencedCity = cities.save(new City(unreferencedState.getId(), "UnusedFilterOptCity " + unique()));
+        UUID referencedIndustryId = createIndustry();
+        UUID unreferencedIndustryId = createIndustry();
+
+        CompanyAddressRequest address = new CompanyAddressRequest(CompanyAddressType.REGISTERED_OFFICE, true,
+                "1 Filter Street", null, referencedState.getId(), referencedCity.getId(), "302001");
+        controller.create(new CreateCompanyRequest("FilterOpt Co " + unique(), referencedIndustryId, null, null,
+                List.of(address), "Owner", "owner-" + unique() + "@example.com", null));
+
+        CompanyFilterOptionsResponse options = filterOptionsService.get();
+
+        assertThat(options.states()).extracting(StateSummary::id).contains(referencedState.getId());
+        assertThat(options.states()).extracting(StateSummary::id).doesNotContain(unreferencedState.getId());
+        assertThat(options.cities()).extracting(CitySummary::id).contains(referencedCity.getId());
+        assertThat(options.cities()).extracting(CitySummary::id).doesNotContain(unreferencedCity.getId());
+        assertThat(options.industries()).extracting(IndustrySummary::id).contains(referencedIndustryId);
+        assertThat(options.industries()).extracting(IndustrySummary::id).doesNotContain(unreferencedIndustryId);
     }
 
     @Test

@@ -48,7 +48,7 @@ class SkillCategoryAdminIntegrationTest {
     /** A designation assigned to {@code skillCategoryId} - exists purely to exercise the delete-guard tests below. */
     private void createDesignationInSkillCategory(UUID skillCategoryId) {
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
-        designationService.create(new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), skillCategoryId));
+        designationService.create(new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), industry.id(), skillCategoryId));
     }
 
     @Test

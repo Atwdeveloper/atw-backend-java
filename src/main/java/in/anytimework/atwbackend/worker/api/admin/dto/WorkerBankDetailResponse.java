@@ -14,7 +14,6 @@ public record WorkerBankDetailResponse(
                 + "workers.view_bank_details, in which case the full decrypted number is returned.",
                 example = "**********5678") String accountNumber,
         @Schema(example = "SBIN0001234") String ifscCode,
-        @Schema(example = "Jaipur Civil Lines Branch") String branchName,
         @Schema(description = "Not modifiable through this endpoint - reflects verification performed "
                 + "elsewhere, if any.") boolean verified,
         @Schema(nullable = true) Instant verifiedAt

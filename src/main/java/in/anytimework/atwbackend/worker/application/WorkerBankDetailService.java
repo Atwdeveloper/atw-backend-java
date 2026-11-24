@@ -51,15 +51,14 @@ public class WorkerBankDetailService {
     public WorkerBankDetailResponse get(UUID workerId) {
         requireWorkerExists(workerId);
         return bankDetails.findByWorkerId(workerId).map(this::toDto)
-                .orElse(new WorkerBankDetailResponse(null, null, null, null, null, false, null));
+                .orElse(new WorkerBankDetailResponse(null, null, null, null, false, null));
     }
 
     @Transactional
     public WorkerBankDetailResponse update(UUID workerId, UpdateWorkerBankDetailRequest request) {
         requireWorkerExists(workerId);
         WorkerBankDetail detail = bankDetails.findByWorkerId(workerId).orElseGet(() -> new WorkerBankDetail(workerId));
-        detail.update(request.accountHolderName(), request.bankName(), request.accountNumber(),
-                request.ifscCode(), request.branchName());
+        detail.update(request.accountHolderName(), request.bankName(), request.accountNumber(), request.ifscCode());
         detail = bankDetails.save(detail);
         return toDto(detail);
     }
@@ -130,6 +129,6 @@ public class WorkerBankDetailService {
         boolean unmasked = permissionChecker.has("workers.view_bank_details");
         String accountNumber = unmasked ? detail.getAccountNumber() : PiiMasking.maskTail(detail.getAccountNumber());
         return new WorkerBankDetailResponse(detail.getAccountHolderName(), detail.getBankName(), accountNumber,
-                detail.getIfscCode(), detail.getBranchName(), detail.isVerified(), detail.getVerifiedAt());
+                detail.getIfscCode(), detail.isVerified(), detail.getVerifiedAt());
     }
 }

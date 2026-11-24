@@ -1,13 +1,10 @@
 package in.anytimework.atwbackend.worker;
 
 import in.anytimework.atwbackend.document.FileStorageTestConfig;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDepartmentRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
-import in.anytimework.atwbackend.masterdata.api.admin.dto.DepartmentResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
-import in.anytimework.atwbackend.masterdata.application.DepartmentService;
 import in.anytimework.atwbackend.masterdata.application.DesignationService;
 import in.anytimework.atwbackend.masterdata.application.IndustryService;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
@@ -66,8 +63,6 @@ class WorkerSatelliteServicesIntegrationTest {
     @Autowired
     private WorkerNoteService noteService;
     @Autowired
-    private DepartmentService departmentService;
-    @Autowired
     private IndustryService industryService;
     @Autowired
     private DesignationService designationService;
@@ -85,12 +80,11 @@ class WorkerSatelliteServicesIntegrationTest {
     }
 
     private UUID createWorker() {
-        DepartmentResponse department = departmentService.create(new CreateDepartmentRequest("Dept " + unique()));
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
         DesignationResponse designation = designationService.create(
-                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), null));
+                new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), industry.id(), null));
         WorkerResponse worker = workerService.create(new CreateWorkerRequest("Test", null, "Worker " + unique(),
-                null, Gender.MALE, null, uniqueMobile(), null, department.id(), null, null,
+                null, Gender.MALE, null, uniqueMobile(), null, null, null,
                 Set.of(designation.id()), designation.id(), Set.of()));
         return worker.id();
     }
@@ -150,7 +144,7 @@ class WorkerSatelliteServicesIntegrationTest {
     void bankDetail_update_thenGet_roundTrips() {
         UUID workerId = createWorker();
         WorkerBankDetailResponse updated = bankDetailService.update(workerId,
-                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234"));
 
         // Without workers.view_bank_details (no authenticated caller in this test), the account number must be masked.
         assertThat(updated.accountNumber()).isNotEqualTo("31234567890");
@@ -206,7 +200,7 @@ class WorkerSatelliteServicesIntegrationTest {
     void bankDetail_verify_withTheDefaultStubProvider_marksVerified() {
         UUID workerId = createWorker();
         bankDetailService.update(workerId,
-                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234"));
 
         WorkerBankDetailResponse verified = bankDetailService.verify(workerId);
 
@@ -234,7 +228,7 @@ class WorkerSatelliteServicesIntegrationTest {
     void bankDetail_check_doesNotMarkAnyExistingWorkersBankDetailAsVerified() {
         UUID workerId = createWorker();
         bankDetailService.update(workerId,
-                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234"));
 
         bankDetailService.check("31234567890", "SBIN0001234", "Ramesh Kumar");
 
@@ -247,11 +241,11 @@ class WorkerSatelliteServicesIntegrationTest {
     void bankDetail_update_afterVerifying_resetsVerifiedFlag() {
         UUID workerId = createWorker();
         bankDetailService.update(workerId,
-                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234", "Main Branch"));
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0001234"));
         bankDetailService.verify(workerId);
 
         WorkerBankDetailResponse reUpdated = bankDetailService.update(workerId,
-                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0009999", "Main Branch"));
+                new UpdateWorkerBankDetailRequest("Ramesh Kumar", "SBI", "31234567890", "SBIN0009999"));
 
         assertThat(reUpdated.verified()).isFalse();
     }

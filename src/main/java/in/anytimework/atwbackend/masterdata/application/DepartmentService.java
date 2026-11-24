@@ -13,15 +13,11 @@ import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.kernel.ActiveStatus;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
@@ -33,7 +29,9 @@ import java.util.UUID;
  * CRUD for departments. Legacy left this unguarded (no RBAC module, no edit/delete at all) - that
  * was a gap, not a deliberate design, so this gets the same full treatment as every other masterdata
  * entity: authorization ({@code department.view/create/edit/toggle_status/delete}) enforced at the
- * controller, multiselect filtering + pagination, and guarded single/bulk delete.
+ * controller, multiselect filtering + pagination, and single/bulk delete. Delete has no FK guard to
+ * worry about - {@code worker.department_id} (the only column that ever referenced this table) was
+ * removed entirely (see {@code V40__worker_remove_department.sql}), and nothing else does.
  */
 @Service
 public class DepartmentService {
@@ -42,15 +40,9 @@ public class DepartmentService {
     private static final Set<String> ALLOWED_SORT = Set.of("name", "status", "createdAt");
 
     private final DepartmentRepository departments;
-    private final TransactionTemplate requiresNewTransaction;
 
-    DepartmentService(DepartmentRepository departments, PlatformTransactionManager transactionManager) {
+    DepartmentService(DepartmentRepository departments) {
         this.departments = departments;
-        // REQUIRES_NEW: each bulkDelete() attempt must commit/fail independently of the others - see
-        // that method's Javadoc. Same pattern as DocumentServiceImpl's split transactions around a
-        // blob upload.
-        this.requiresNewTransaction = new TransactionTemplate(transactionManager);
-        this.requiresNewTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Transactional(readOnly = true)
@@ -121,53 +113,28 @@ public class DepartmentService {
         return new BulkActionResult(successCount, failures);
     }
 
-    /**
-     * Relies entirely on the existing {@code worker.department_id REFERENCES department(id) ON DELETE
-     * RESTRICT} constraint, not a cross-module existence pre-check: masterdata must never query
-     * another module's table directly (one owner per table), and a separate pre-check would race
-     * against a concurrent insert anyway. {@code flush()} forces Postgres to evaluate the constraint
-     * inside this method's own try/catch, rather than letting it surface later, outside this method, at
-     * the next unrelated flush point.
-     *
-     * <p>{@code @Transactional} here takes effect when this is called directly (the single-delete
-     * controller endpoint); when called instead from {@link #bulkDelete}, it's bypassed (plain
-     * self-invocation never goes through the proxy) and {@code requiresNewTransaction} provides the
-     * real transaction boundary instead - both paths are intentional, see {@link #bulkDelete}'s
-     * Javadoc.</p>
-     */
     @Transactional
     public void delete(UUID id) {
         Department department = findOrThrow(id);
-        try {
-            departments.delete(department);
-            departments.flush();
-        } catch (DataIntegrityViolationException e) {
-            throw new ConflictException(
-                    "Cannot delete this department because one or more workers are currently assigned to it. "
-                            + "Reassign those workers to a different department first, or deactivate it instead.");
-        }
+        departments.delete(department);
     }
 
     /**
-     * Deliberately NOT {@code @Transactional} itself - each id's delete runs in its OWN transaction via
-     * {@link #requiresNewTransaction}, not one shared across the whole batch. Once a flush fails with
-     * {@code DataIntegrityViolationException}, Hibernate marks that persistence context rollback-only
-     * for the rest of ITS transaction, even though the exception is caught right here - so if this
-     * method's own body ran inside one ambient transaction, the NEXT id in the loop would fail too,
-     * regardless of whether it could have succeeded entirely on its own. Same reasoning and pattern as
-     * {@code DocumentServiceImpl}'s split transactions around a blob upload.
+     * Mirrors {@link #bulkUpdateStatus}'s reasoning, not {@code WorkerService.bulkDelete}'s - a plain
+     * delete with nothing referencing this table by FK can only ever fail with a clean, pre-write
+     * {@link ResourceNotFoundException}, never a failed flush, so every id safely shares one ordinary
+     * transaction instead of needing its own.
      */
+    @Transactional
     public BulkActionResult bulkDelete(Set<UUID> ids) {
         List<BulkActionFailure> failures = new ArrayList<>();
         int successCount = 0;
         for (UUID id : ids) {
             try {
-                requiresNewTransaction.executeWithoutResult(status -> delete(id));
+                delete(id);
                 successCount++;
             } catch (ResourceNotFoundException e) {
                 failures.add(new BulkActionFailure(id, "Not found"));
-            } catch (ConflictException e) {
-                failures.add(new BulkActionFailure(id, e.getMessage()));
             }
         }
         return new BulkActionResult(successCount, failures);

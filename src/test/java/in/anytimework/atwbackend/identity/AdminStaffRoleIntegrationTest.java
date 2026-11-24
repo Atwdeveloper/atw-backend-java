@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.identity;
 import in.anytimework.atwbackend.identity.api.role.dto.CreateAdminRoleRequest;
 import in.anytimework.atwbackend.identity.api.role.dto.AdminRoleResponse;
 import in.anytimework.atwbackend.identity.api.role.dto.UpdateAdminRoleRequest;
+import in.anytimework.atwbackend.identity.api.staff.dto.AdminStaffFilterOptionsResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserAddressResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserBankDetailResponse;
 import in.anytimework.atwbackend.identity.api.staff.dto.AdminUserKycResponse;
@@ -19,6 +20,7 @@ import in.anytimework.atwbackend.identity.application.AuthService;
 import in.anytimework.atwbackend.identity.application.AdminRoleService;
 import in.anytimework.atwbackend.identity.application.AdminStaffAddressService;
 import in.anytimework.atwbackend.identity.application.AdminStaffBankDetailService;
+import in.anytimework.atwbackend.identity.application.AdminStaffFilterOptionsService;
 import in.anytimework.atwbackend.identity.application.AdminStaffKycService;
 import in.anytimework.atwbackend.identity.application.AdminStaffProfileService;
 import in.anytimework.atwbackend.identity.application.AdminStaffSearchCriteria;
@@ -31,6 +33,8 @@ import in.anytimework.atwbackend.identity.domain.AdminUserRepository;
 import in.anytimework.atwbackend.identity.domain.Gender;
 import in.anytimework.atwbackend.identity.domain.AdminRole;
 import in.anytimework.atwbackend.identity.domain.AdminRoleRepository;
+import in.anytimework.atwbackend.masterdata.application.lookup.CitySummary;
+import in.anytimework.atwbackend.masterdata.application.lookup.StateSummary;
 import in.anytimework.atwbackend.masterdata.domain.City;
 import in.anytimework.atwbackend.masterdata.domain.CityRepository;
 import in.anytimework.atwbackend.masterdata.domain.State;
@@ -98,6 +102,8 @@ class AdminStaffRoleIntegrationTest {
     private AdminStaffKycService staffKycService;
     @Autowired
     private AdminStaffBankDetailService staffBankDetailService;
+    @Autowired
+    private AdminStaffFilterOptionsService staffFilterOptionsService;
     @Autowired
     private AuthService authService;
     @Autowired
@@ -756,6 +762,42 @@ class AdminStaffRoleIntegrationTest {
                 new AdminStaffSearchCriteria(null, null, null, null, null, Set.of(jaipur.getId())),
                 PageRequest.of(0, 50));
         assertThat(listed.content()).extracting(AdminStaffResponse::city).contains(jaipur.getName());
+    }
+
+    /**
+     * Proves actual scoping, not just "the endpoint returns something": a freshly created, never
+     * referenced state/city/role must NOT appear, while one actually assigned to a staff member must.
+     * Doesn't assert the OTHER direction (that every pre-existing masterdata state is absent) - this
+     * shared test database accumulates real staff/addresses across the whole suite (same caveat
+     * documented on staffList_roleFilterIsMultiselect above), so a fresh, deliberately-unused
+     * comparison value is the only reliable way to prove the negative case here.
+     */
+    @Test
+    void staffFilterOptions_onlyIncludesValuesActuallyReferencedByAStaffMember() {
+        State referencedState = states.save(new State("FilterOptState " + unique(), unique().toUpperCase()));
+        City referencedCity = cities.save(new City(referencedState.getId(), "FilterOptCity " + unique()));
+        State unreferencedState = states.save(new State("UnusedFilterOptState " + unique(), unique().toUpperCase()));
+        City unreferencedCity = cities.save(new City(unreferencedState.getId(), "UnusedFilterOptCity " + unique()));
+
+        String staffName = "Filter Options Staff " + unique();
+        AdminStaffResponse staff = createStaffAsSuperAdmin(staffName, List.of());
+        staffAddressService.update(staff.id(),
+                new UpdateAddressRequest("1 Filter Street", null, referencedState.getId(), referencedCity.getId(), "302001"),
+                "127.0.0.1", "JUnit");
+
+        AdminRoleResponse assignedRole = createRoleAsSuperAdmin("Assigned FilterOpt Role " + unique(), null, List.of());
+        AdminRoleResponse unassignedRole = createRoleAsSuperAdmin("Unassigned FilterOpt Role " + unique(), null, List.of());
+        staffService.update(staff.id(),
+                new UpdateAdminStaffRequest(null, staffName, null, List.of(assignedRole.id())), "127.0.0.1", "JUnit");
+
+        AdminStaffFilterOptionsResponse options = staffFilterOptionsService.get();
+
+        assertThat(options.states()).extracting(StateSummary::id).contains(referencedState.getId());
+        assertThat(options.states()).extracting(StateSummary::id).doesNotContain(unreferencedState.getId());
+        assertThat(options.cities()).extracting(CitySummary::id).contains(referencedCity.getId());
+        assertThat(options.cities()).extracting(CitySummary::id).doesNotContain(unreferencedCity.getId());
+        assertThat(options.roles()).extracting(AdminRoleRef::id).contains(assignedRole.id());
+        assertThat(options.roles()).extracting(AdminRoleRef::id).doesNotContain(unassignedRole.id());
     }
 
     @Test

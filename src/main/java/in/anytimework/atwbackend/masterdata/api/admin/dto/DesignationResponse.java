@@ -1,6 +1,5 @@
 package in.anytimework.atwbackend.masterdata.api.admin.dto;
 
-import in.anytimework.atwbackend.masterdata.application.lookup.IndustrySummary;
 import in.anytimework.atwbackend.shared.kernel.ActiveStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -15,8 +14,9 @@ public record DesignationResponse(
                 + "null when none is set. Always null in the List response - only GET /{id} resolves a real "
                 + "value.", nullable = true)
         String imageUrl,
-        @Schema(description = "Every industry this designation belongs to (always at least one).")
-        List<IndustrySummary> industries,
+        @Schema(description = "Every industry this designation belongs to (always at least one); exactly one "
+                + "has primary=true. Sorted primary-first, then alphabetically.")
+        List<DesignationIndustryRef> industries,
         @Schema(description = "Assigned skill category id, or null if none is assigned. Set/cleared only via "
                 + "the dedicated assign/clear skill-category endpoints - never via the general Update.",
                 nullable = true, example = "8c7b6a5d-4e3f-4d2c-9b1a-7f6e5d4c3b2a")

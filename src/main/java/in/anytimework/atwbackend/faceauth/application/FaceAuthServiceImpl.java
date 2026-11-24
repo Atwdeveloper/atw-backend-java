@@ -80,6 +80,12 @@ class FaceAuthServiceImpl implements FaceAuthService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Set<UUID> findEnrolledWorkerIds() {
+        return enrollments.findAllWorkerIds();
+    }
+
+    @Override
     @Transactional
     public FaceEnrollmentDto enroll(UUID workerId, String filename, String contentType, byte[] content,
                                     boolean consentGiven, String consentIp) {

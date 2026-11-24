@@ -6,6 +6,7 @@ import in.anytimework.atwbackend.masterdata.domain.SkillCategoryRepository;
 import in.anytimework.atwbackend.masterdata.domain.StateRepository;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.kernel.ActiveStatus;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -38,10 +39,11 @@ class MinimumWageRateServiceTest {
     private final MinimumWageRateRepository rates = mock(MinimumWageRateRepository.class);
     private final StateRepository states = mock(StateRepository.class);
     private final SkillCategoryRepository skillCategories = mock(SkillCategoryRepository.class);
+    private final EntityManager entityManager = mock(EntityManager.class);
 
     @Test
     void resolveEffective_withNullAsOf_usesTheClocksZoneNotUtc() {
-        MinimumWageRateService service = new MinimumWageRateService(rates, states, skillCategories, IST_CLOCK);
+        MinimumWageRateService service = new MinimumWageRateService(rates, states, skillCategories, entityManager, IST_CLOCK);
         UUID stateId = UUID.randomUUID();
         UUID categoryId = UUID.randomUUID();
         when(rates.findFirstByStateIdAndSkillCategoryIdAndStatusAndEffectiveFromLessThanEqualOrderByEffectiveFromDesc(
@@ -58,7 +60,7 @@ class MinimumWageRateServiceTest {
 
     @Test
     void resolveEffective_withExplicitAsOf_ignoresTheClockEntirely() {
-        MinimumWageRateService service = new MinimumWageRateService(rates, states, skillCategories, IST_CLOCK);
+        MinimumWageRateService service = new MinimumWageRateService(rates, states, skillCategories, entityManager, IST_CLOCK);
         UUID stateId = UUID.randomUUID();
         UUID categoryId = UUID.randomUUID();
         LocalDate explicitDate = LocalDate.of(2020, 1, 1);
@@ -74,7 +76,7 @@ class MinimumWageRateServiceTest {
 
     @Test
     void create_rejectsADuplicateActiveVersionForTheSameEffectiveDate() {
-        MinimumWageRateService service = new MinimumWageRateService(rates, states, skillCategories, IST_CLOCK);
+        MinimumWageRateService service = new MinimumWageRateService(rates, states, skillCategories, entityManager, IST_CLOCK);
         UUID stateId = UUID.randomUUID();
         UUID categoryId = UUID.randomUUID();
         LocalDate effectiveFrom = LocalDate.of(2026, 4, 1);
