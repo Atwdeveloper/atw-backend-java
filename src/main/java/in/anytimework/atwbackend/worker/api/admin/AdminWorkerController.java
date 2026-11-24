@@ -514,13 +514,13 @@ public class AdminWorkerController {
             }
             """;
 
-    private static final String EX_ERROR_BUSINESS_RULE_BLACKLIST = """
+    private static final String EX_ERROR_BUSINESS_RULE_ACTIVE_REQUIRES_KYC = """
             {
               "success": false,
               "data": null,
               "error": {
                 "code": "BUSINESS_RULE_VIOLATION",
-                "message": "Only a super-admin can blacklist a worker or reverse a blacklist.",
+                "message": "A worker must complete KYC before becoming ACTIVE; this happens automatically, not via this endpoint.",
                 "fieldErrors": null,
                 "timestamp": "2026-11-13T10:00:00Z",
                 "traceId": "f60718293a4b5c6d"
@@ -779,8 +779,8 @@ public class AdminWorkerController {
             - `ACTIVE` is reachable here only from `SUSPENDED`/`INACTIVE` - from `REGISTERED`/`KYC_PENDING`, \
             a worker becomes `ACTIVE` only by completing KYC verification (automatic, not via this \
             endpoint).
-            - Entering **or** leaving `BLACKLISTED` requires the caller to be a super-admin - \
-            un-blacklisting is exactly as high-privilege as blacklisting.""")
+            - Entering or leaving `BLACKLISTED` needs nothing beyond the ordinary `workers.toggle_status` \
+            permission every other transition here already requires.""")
     @Parameter(name = "id", description = "Worker id.", example = "c7a1e4d2-9b3f-4a6e-8c5d-1f2a3b4c5d6e")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "New status applied.",
             content = @Content(schema = @Schema(implementation = WorkerResponse.class),
@@ -791,8 +791,8 @@ public class AdminWorkerController {
             description = "Target is REGISTERED/KYC_PENDING, equals the current status, or reason is missing for SUSPENDED/BLACKLISTED/INACTIVE.",
             content = @Content(examples = @ExampleObject(value = EX_ERROR_VALIDATION_STATUS_RULE)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422",
-            description = "Blacklist/un-blacklist attempted by a non-super-admin, or ACTIVE requested directly from REGISTERED/KYC_PENDING.",
-            content = @Content(examples = @ExampleObject(value = EX_ERROR_BUSINESS_RULE_BLACKLIST)))
+            description = "ACTIVE requested directly from REGISTERED/KYC_PENDING.",
+            content = @Content(examples = @ExampleObject(value = EX_ERROR_BUSINESS_RULE_ACTIVE_REQUIRES_KYC)))
     @PostMapping("/{id}/status")
     @PreAuthorize("@authz.has('workers.toggle_status')")
     public ApiResponse<WorkerResponse> updateStatus(@PathVariable UUID id, @Valid @RequestBody UpdateWorkerStatusRequest request) {
@@ -804,9 +804,9 @@ public class AdminWorkerController {
 
             Applies the exact same guarded transition as Change Worker Status (above) to every id \
             independently. Partial success is the normal, expected outcome, not an all-or-nothing \
-            failure - one id failing its guard (not found, bad target status, missing reason, blacklist \
-            without super-admin, ...) is recorded in `failures[]` and does not roll back the ids that \
-            already succeeded.""")
+            failure - one id failing its guard (not found, bad target status, missing reason, ACTIVE \
+            requested directly from REGISTERED/KYC_PENDING, ...) is recorded in `failures[]` and does not \
+            roll back the ids that already succeeded.""")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
             description = "Always 200 - inspect `data.failures` for any ids that didn't apply.",
             content = @Content(schema = @Schema(implementation = BulkActionResult.class),

@@ -25,7 +25,6 @@ import in.anytimework.atwbackend.shared.export.ExcelWriter;
 import in.anytimework.atwbackend.shared.kernel.Address;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
-import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerDesignationsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerSkillsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
@@ -117,7 +116,6 @@ public class WorkerService {
     private final FaceAuthService faceAuthService;
     private final DocumentService documentService;
     private final WorkerProfilePhotoSupport photoSupport;
-    private final CurrentAdmin currentAdmin;
     private final Clock clock;
 
     public WorkerService(WorkerRepository workers, WorkerDesignationRepository workerDesignations,
@@ -126,7 +124,7 @@ public class WorkerService {
                          IndustryLookupService industryLookup, DesignationLookupService designationLookup,
                          SkillLookupService skillLookup, GeographyLookupService geography, KycService kycService,
                          FaceAuthService faceAuthService, DocumentService documentService,
-                         WorkerProfilePhotoSupport photoSupport, CurrentAdmin currentAdmin, Clock clock) {
+                         WorkerProfilePhotoSupport photoSupport, Clock clock) {
         this.workers = workers;
         this.workerDesignations = workerDesignations;
         this.workerSkills = workerSkills;
@@ -140,7 +138,6 @@ public class WorkerService {
         this.faceAuthService = faceAuthService;
         this.documentService = documentService;
         this.photoSupport = photoSupport;
-        this.currentAdmin = currentAdmin;
         this.clock = clock;
     }
 
@@ -334,10 +331,8 @@ public class WorkerService {
      *   <li>REGISTERED/KYC_PENDING are reached only automatically - never a valid target here.</li>
      *   <li>No-op transitions (newStatus == current status) are rejected rather than silently accepted.</li>
      *   <li>A reason is required for SUSPENDED/BLACKLISTED/INACTIVE.</li>
-     *   <li>Entering OR leaving BLACKLISTED requires a super-admin - un-blacklisting is exactly as
-     *       high-privilege as blacklisting, not a one-way gate (a real gap an earlier version of this
-     *       method had: any holder of workers.toggle_status could silently reverse a super-admin's
-     *       blacklist decision just by requesting ACTIVE).</li>
+     *   <li>Entering OR leaving BLACKLISTED needs nothing beyond the ordinary workers.toggle_status
+     *       permission every other transition here already requires - not a separately-gated action.</li>
      *   <li>ACTIVE is not reachable directly from REGISTERED/KYC_PENDING via this admin endpoint - a
      *       worker must complete KYC (see {@link #activateAfterKycVerified}, which calls the private
      *       {@link #changeStatus} helper directly and is therefore unaffected by this restriction).</li>
@@ -355,10 +350,6 @@ public class WorkerService {
         }
         if (REASON_REQUIRED_STATUSES.contains(newStatus) && !StringUtils.hasText(reason)) {
             throw new ValidationException("A reason is required when setting status to " + newStatus + ".");
-        }
-        boolean touchesBlacklist = newStatus == WorkerStatus.BLACKLISTED || oldStatus == WorkerStatus.BLACKLISTED;
-        if (touchesBlacklist && !currentAdmin.isSuperAdmin()) {
-            throw new BusinessRuleException("Only a super-admin can blacklist a worker or reverse a blacklist.");
         }
         if (newStatus == WorkerStatus.ACTIVE && NOT_DIRECTLY_SETTABLE.contains(oldStatus)) {
             throw new BusinessRuleException(

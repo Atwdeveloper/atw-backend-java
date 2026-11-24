@@ -9,7 +9,6 @@ import in.anytimework.atwbackend.masterdata.application.lookup.IndustryLookupSer
 import in.anytimework.atwbackend.masterdata.application.lookup.SkillLookupService;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
-import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import in.anytimework.atwbackend.worker.domain.Gender;
 import in.anytimework.atwbackend.worker.domain.Worker;
 import in.anytimework.atwbackend.worker.domain.WorkerAddressRepository;
@@ -37,9 +36,11 @@ import static org.mockito.Mockito.when;
  * Pure unit tests (no Spring context, no DB) for the status-transition guards in WorkerService -
  * mirrors MinimumWageRateServiceTest's style for a service whose business rules don't need a real
  * database to verify. Covers every rule with no DB-level backstop: a reason is required for
- * SUSPENDED/BLACKLISTED/INACTIVE; entering OR leaving BLACKLISTED requires a super-admin; REGISTERED/
- * KYC_PENDING are never a valid admin-chosen target; and ACTIVE is unreachable directly from
- * REGISTERED/KYC_PENDING (a worker must complete KYC first).
+ * SUSPENDED/BLACKLISTED/INACTIVE; REGISTERED/KYC_PENDING are never a valid admin-chosen target; and
+ * ACTIVE is unreachable directly from REGISTERED/KYC_PENDING (a worker must complete KYC first).
+ * Entering/leaving BLACKLISTED needs no extra privilege beyond the ordinary workers.toggle_status
+ * permission every other transition here already requires - see updateStatus_toBlacklisted_isAllowed/
+ * updateStatus_fromBlacklisted_isAllowed below.
  */
 class WorkerServiceStatusGuardTest {
 
@@ -56,7 +57,6 @@ class WorkerServiceStatusGuardTest {
     private final FaceAuthService faceAuthService = mock(FaceAuthService.class);
     private final DocumentService documentService = mock(DocumentService.class);
     private final WorkerProfilePhotoSupport photoSupport = mock(WorkerProfilePhotoSupport.class);
-    private final CurrentAdmin currentAdmin = mock(CurrentAdmin.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-10T06:00:00Z"), ZoneOffset.UTC);
 
     private final Worker worker = new Worker("WRK0000001", "Ramesh", null, "Kumar", null, Gender.MALE,
@@ -65,7 +65,7 @@ class WorkerServiceStatusGuardTest {
     private WorkerService service() {
         return new WorkerService(workers, workerDesignations, workerSkills, statusHistory, workerAddresses,
                 industryLookup, designationLookup, skillLookup, geography, kycService,
-                faceAuthService, documentService, photoSupport, currentAdmin, clock);
+                faceAuthService, documentService, photoSupport, clock);
     }
 
     private void stubExistingWorker() {
@@ -142,39 +142,19 @@ class WorkerServiceStatusGuardTest {
     }
 
     @Test
-    void updateStatus_toBlacklisted_byNonSuperAdmin_isRejected() {
+    void updateStatus_toBlacklisted_isAllowed() {
+        // No super-admin check here anymore - any caller who reached this method at all already holds
+        // workers.toggle_status (enforced at the controller via @PreAuthorize), and that's sufficient.
         stubExistingWorker();
-        when(currentAdmin.isSuperAdmin()).thenReturn(false);
-        assertThatThrownBy(() -> service().updateStatus(worker.getId(), WorkerStatus.BLACKLISTED, "Fraudulent documents"))
-                .isInstanceOf(BusinessRuleException.class)
-                .hasMessageContaining("super-admin");
-    }
-
-    @Test
-    void updateStatus_toBlacklisted_bySuperAdmin_isAllowed() {
-        stubExistingWorker();
-        when(currentAdmin.isSuperAdmin()).thenReturn(true);
         assertThatCode(() -> service().updateStatus(worker.getId(), WorkerStatus.BLACKLISTED, "Fraudulent documents"))
                 .doesNotThrowAnyException();
     }
 
     @Test
-    void updateStatus_fromBlacklisted_byNonSuperAdmin_isRejected() {
-        // A non-super-admin must not be able to silently reverse a super-admin's blacklist decision
-        // just by requesting a different target status - leaving BLACKLISTED is as privileged as entering it.
+    void updateStatus_fromBlacklisted_isAllowed() {
+        // Leaving BLACKLISTED is no longer gated any differently than entering it or any other transition.
         worker.changeStatus(WorkerStatus.BLACKLISTED, "Fraudulent documents");
         stubExistingWorker();
-        when(currentAdmin.isSuperAdmin()).thenReturn(false);
-        assertThatThrownBy(() -> service().updateStatus(worker.getId(), WorkerStatus.ACTIVE, null))
-                .isInstanceOf(BusinessRuleException.class)
-                .hasMessageContaining("super-admin");
-    }
-
-    @Test
-    void updateStatus_fromBlacklisted_bySuperAdmin_isAllowed() {
-        worker.changeStatus(WorkerStatus.BLACKLISTED, "Fraudulent documents");
-        stubExistingWorker();
-        when(currentAdmin.isSuperAdmin()).thenReturn(true);
         assertThatCode(() -> service().updateStatus(worker.getId(), WorkerStatus.ACTIVE, null))
                 .doesNotThrowAnyException();
     }
