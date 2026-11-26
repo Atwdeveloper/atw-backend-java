@@ -602,7 +602,7 @@
     },
     {
       "name": "Worker Status",
-      "description": "The worker lifecycle: `REGISTERED -> KYC_PENDING -> ACTIVE <-> INACTIVE`, with `SUSPENDED` (temporary, no-fault hold) and `BLACKLISTED` (permanent ban) as two deliberately distinct paths off `ACTIVE` - legacy conflated all three into one inactive flag with no reason captured. Every change here takes an explicit target status via `workers.toggle_status` (single or bulk), never a blind toggle. `REGISTERED`/`KYC_PENDING` are reached only automatically (worker creation / KYC verification) and can never be set through this API; `ACTIVE` is reachable here only from `SUSPENDED`/`INACTIVE`, never from `REGISTERED`/`KYC_PENDING` (that requires completing KYC, which runs asynchronously outside any admin's request - see Worker KYC Bridge below). Entering or leaving `BLACKLISTED` additionally requires the caller to be a super-admin - un-blacklisting is exactly as high-privilege as blacklisting. Status History is the append-only, never-edited audit trail of every transition a worker has ever had, including the one this folder's own endpoints never make directly (the automatic KYC-verified → `ACTIVE` move, recorded with `changedBy: \"system\"`).",
+      "description": "The worker lifecycle: `REGISTERED -> KYC_PENDING -> ACTIVE <-> INACTIVE`, with `SUSPENDED` (temporary, no-fault hold) and `BLACKLISTED` (permanent ban) as two deliberately distinct paths off `ACTIVE` - legacy conflated all three into one inactive flag with no reason captured. Every change here takes an explicit target status via `workers.toggle_status` (single or bulk), never a blind toggle. `REGISTERED`/`KYC_PENDING` are reached only automatically (worker creation / KYC verification) and can never be set through this API; `ACTIVE` is reachable here only from `SUSPENDED`/`INACTIVE`, never from `REGISTERED`/`KYC_PENDING` (that requires completing KYC, which runs asynchronously outside any admin's request - see Worker KYC Bridge below). Entering or leaving `BLACKLISTED` needs nothing beyond the ordinary `workers.toggle_status` permission every other transition here already requires. Status History is the append-only, never-edited audit trail of every transition a worker has ever had, including the one this folder's own endpoints never make directly (the automatic KYC-verified → `ACTIVE` move, recorded with `changedBy: {id: null, name: \"System\", userType: \"SYSTEM\"}`).",
       "item": [
         {
           "name": "Change Worker Status",
@@ -812,7 +812,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "admin", "workers", "{{workerId}}", "status-history"]
             },
-            "description": "**Permission:** `workers.view`.\n\nEvery status transition this worker has ever had, newest first - an immutable audit trail, never edited after creation. The very first row (`fromStatus: null`, `toStatus: REGISTERED`) is recorded at worker creation. `changedBy` is the acting admin's username, or `\"system\"` for the one transition this controller never makes directly: the automatic REGISTERED/KYC_PENDING to ACTIVE move triggered by KYC verification completing (it runs asynchronously, outside any admin's own request).\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
+            "description": "**Permission:** `workers.view`.\n\nEvery status transition this worker has ever had, newest first - an immutable audit trail, never edited after creation. The very first row (`fromStatus: null`, `toStatus: REGISTERED`) is recorded at worker creation. `changedBy` is `{id, name, userType}`, resolved for display - `userType: \"SYSTEM\"` (`id: null`, `name: \"System\"`) for the one transition this controller never makes directly: the automatic REGISTERED/KYC_PENDING to ACTIVE move triggered by KYC verification completing (it runs asynchronously, outside any admin's own request). Every other row is `userType: \"ADMIN\"`.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |"
           },
           "event": [
             {
@@ -847,7 +847,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"b5c6d7e8-f9a0-4b2c-9d3e-4f5a6b7c8d9e\",\n        \"fromStatus\": \"SUSPENDED\",\n        \"toStatus\": \"INACTIVE\",\n        \"reason\": \"Bulk deactivation for Q4 roster cleanup\",\n        \"changedBy\": \"admin@anytimework.in\",\n        \"changedAt\": \"2026-11-13T10:05:00Z\"\n      },\n      {\n        \"id\": \"a4b5c6d7-e8f9-4a1b-8c2d-3e4f5a6b7c8d\",\n        \"fromStatus\": null,\n        \"toStatus\": \"REGISTERED\",\n        \"reason\": null,\n        \"changedBy\": \"admin@anytimework.in\",\n        \"changedAt\": \"2026-11-12T10:00:00Z\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 2,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"b5c6d7e8-f9a0-4b2c-9d3e-4f5a6b7c8d9e\",\n        \"fromStatus\": \"SUSPENDED\",\n        \"toStatus\": \"INACTIVE\",\n        \"reason\": \"Bulk deactivation for Q4 roster cleanup\",\n        \"changedBy\": { \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\", \"name\": \"Rahul Prajapat\", \"userType\": \"ADMIN\" },\n        \"changedAt\": \"2026-11-13T10:05:00Z\"\n      },\n      {\n        \"id\": \"a4b5c6d7-e8f9-4a1b-8c2d-3e4f5a6b7c8d\",\n        \"fromStatus\": null,\n        \"toStatus\": \"REGISTERED\",\n        \"reason\": null,\n        \"changedBy\": { \"id\": null, \"name\": \"System\", \"userType\": \"SYSTEM\" },\n        \"changedAt\": \"2026-11-12T10:00:00Z\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 2,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown worker id",
@@ -1527,7 +1527,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Ramesh Kumar Sharma\",\n    \"bankName\": \"State Bank of India\",\n    \"accountNumber\": \"**********5678\",\n    \"ifscCode\": \"SBIN0001234\",\n    \"branchName\": \"Jaipur Civil Lines Branch\",\n    \"verified\": false,\n    \"verifiedAt\": null\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Ramesh Kumar Sharma\",\n    \"bankName\": \"State Bank of India\",\n    \"accountNumber\": \"**********5678\",\n    \"ifscCode\": \"SBIN0001234\",\n    \"verified\": false,\n    \"verifiedAt\": null\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown worker id",
@@ -1561,7 +1561,7 @@
             "description": "**Permission:** `workers.edit`.\n\nFull replace of the bank detail row - every field is optional, captured progressively. `accountNumber` is stored encrypted at rest and is masked back on every read (including this call's own response) unless the caller holds `workers.view_bank_details`. Any change here invalidates a prior verification (`verified`/`verifiedAt` reset to `false`/`null`) - re-run **Verify Worker Bank Detail** after any edit.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Unknown worker id | `RESOURCE_NOT_FOUND` | 404 |",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"accountHolderName\": \"Ramesh Kumar Sharma\",\n  \"bankName\": \"State Bank of India\",\n  \"accountNumber\": \"33412345678\",\n  \"ifscCode\": \"SBIN0001234\",\n  \"branchName\": \"Jaipur Civil Lines Branch\"\n}"
+              "raw": "{\n  \"accountHolderName\": \"Ramesh Kumar Sharma\",\n  \"bankName\": \"State Bank of India\",\n  \"accountNumber\": \"33412345678\",\n  \"ifscCode\": \"SBIN0001234\"\n}"
             }
           },
           "event": [
@@ -1594,14 +1594,14 @@
                 },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"accountHolderName\": \"Ramesh Kumar Sharma\",\n  \"bankName\": \"State Bank of India\",\n  \"accountNumber\": \"33412345678\",\n  \"ifscCode\": \"SBIN0001234\",\n  \"branchName\": \"Jaipur Civil Lines Branch\"\n}"
+                  "raw": "{\n  \"accountHolderName\": \"Ramesh Kumar Sharma\",\n  \"bankName\": \"State Bank of India\",\n  \"accountNumber\": \"33412345678\",\n  \"ifscCode\": \"SBIN0001234\"\n}"
                 }
               },
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Ramesh Kumar Sharma\",\n    \"bankName\": \"State Bank of India\",\n    \"accountNumber\": \"**********5678\",\n    \"ifscCode\": \"SBIN0001234\",\n    \"branchName\": \"Jaipur Civil Lines Branch\",\n    \"verified\": false,\n    \"verifiedAt\": null\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Ramesh Kumar Sharma\",\n    \"bankName\": \"State Bank of India\",\n    \"accountNumber\": \"**********5678\",\n    \"ifscCode\": \"SBIN0001234\",\n    \"verified\": false,\n    \"verifiedAt\": null\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown worker id",
@@ -1671,7 +1671,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Ramesh Kumar Sharma\",\n    \"bankName\": \"State Bank of India\",\n    \"accountNumber\": \"**********5678\",\n    \"ifscCode\": \"SBIN0001234\",\n    \"branchName\": \"Jaipur Civil Lines Branch\",\n    \"verified\": true,\n    \"verifiedAt\": \"2026-11-16T10:00:00Z\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Ramesh Kumar Sharma\",\n    \"bankName\": \"State Bank of India\",\n    \"accountNumber\": \"**********5678\",\n    \"ifscCode\": \"SBIN0001234\",\n    \"verified\": true,\n    \"verifiedAt\": \"2026-11-16T10:00:00Z\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "409 - Bank's name-at-account does not match",
@@ -2108,7 +2108,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"a4b5c6d7-e8f9-4a1b-8c2d-3e4f5a6b7c8d\",\n        \"note\": \"Called to confirm availability for the Monday shift.\",\n        \"createdBy\": \"admin@anytimework.in\",\n        \"createdAt\": \"2026-11-12T11:00:00Z\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 1,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"content\": [\n      {\n        \"id\": \"a4b5c6d7-e8f9-4a1b-8c2d-3e4f5a6b7c8d\",\n        \"note\": \"Called to confirm availability for the Monday shift.\",\n        \"createdBy\": { \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\", \"name\": \"Rahul Prajapat\", \"userType\": \"ADMIN\" },\n        \"createdAt\": \"2026-11-12T11:00:00Z\"\n      }\n    ],\n    \"page\": 0,\n    \"size\": 100,\n    \"totalElements\": 1,\n    \"totalPages\": 1,\n    \"first\": true,\n    \"last\": true\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown worker id",
@@ -2186,7 +2186,7 @@
               "code": 200,
               "_postman_previewlanguage": "json",
               "header": [{"key": "Content-Type", "value": "application/json"}],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"a4b5c6d7-e8f9-4a1b-8c2d-3e4f5a6b7c8d\",\n    \"note\": \"Called to confirm availability for the Monday shift.\",\n    \"createdBy\": \"admin@anytimework.in\",\n    \"createdAt\": \"2026-11-12T11:00:00Z\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"a4b5c6d7-e8f9-4a1b-8c2d-3e4f5a6b7c8d\",\n    \"note\": \"Called to confirm availability for the Monday shift.\",\n    \"createdBy\": { \"id\": \"7c9e6679-7425-40de-944b-e07fc1f90ae7\", \"name\": \"Rahul Prajapat\", \"userType\": \"ADMIN\" },\n    \"createdAt\": \"2026-11-12T11:00:00Z\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown worker id",

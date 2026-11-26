@@ -467,7 +467,7 @@ class AdminStaffRoleIntegrationTest {
         AdminStaffResponse target = createStaffAsSuperAdmin("Bank Target", List.of());
         UUID setupActor = createSuperAdminActor();
         actingAs(setupActor, () -> staffBankDetailService.update(target.id(),
-                new UpdateBankDetailRequest("Target Holder", "Test Bank", "000111222333", "TEST0001234", "MG Road"),
+                new UpdateBankDetailRequest("Target Holder", "Test Bank", "000111222333", "TEST0001234"),
                 "127.0.0.1", "JUnit"));
 
         String rawStored = jdbcTemplate.queryForObject(

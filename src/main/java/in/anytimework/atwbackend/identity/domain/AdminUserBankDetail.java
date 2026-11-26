@@ -17,9 +17,11 @@ import java.util.UUID;
  * number for callers without it) and its own audit trail — this table's
  * {@code updated_by}/{@code updated_at}/{@code version} record who last changed where someone's pay
  * goes, independent of admin_user's own audit trail. The account number is encrypted at rest
- * (AES-256-GCM via {@link EncryptedStringConverter}); the other fields (holder name, bank name,
- * IFSC, branch) aren't secret enough to need it. Optional: a row exists only once this data has
- * actually been captured.
+ * (AES-256-GCM via {@link EncryptedStringConverter}); the other fields (holder name, bank name, IFSC)
+ * aren't secret enough to need it. Optional: a row exists only once this data has actually been
+ * captured. {@code branchName} was removed entirely (PO-requested cleanup, same as
+ * {@code worker.domain.WorkerBankDetail}'s own removal) - redundant with {@code ifscCode}, which
+ * alone uniquely identifies the branch in India's banking system.
  */
 @Getter
 @Entity
@@ -42,9 +44,6 @@ public class AdminUserBankDetail extends BaseEntity {
     @Column(name = "ifsc_code", length = 15)
     private String ifscCode;
 
-    @Column(name = "branch_name", length = 150)
-    private String branchName;
-
     protected AdminUserBankDetail() {
         // required by JPA
     }
@@ -53,11 +52,10 @@ public class AdminUserBankDetail extends BaseEntity {
         this.adminUserId = adminUserId;
     }
 
-    public void update(String accountHolderName, String bankName, String accountNumber, String ifscCode, String branchName) {
+    public void update(String accountHolderName, String bankName, String accountNumber, String ifscCode) {
         this.accountHolderName = accountHolderName;
         this.bankName = bankName;
         this.accountNumber = accountNumber;
         this.ifscCode = ifscCode;
-        this.branchName = branchName;
     }
 }

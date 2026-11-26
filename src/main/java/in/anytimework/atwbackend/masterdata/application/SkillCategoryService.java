@@ -3,6 +3,9 @@ package in.anytimework.atwbackend.masterdata.application;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateSkillCategoryRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.SkillCategoryResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.UpdateSkillCategoryRequest;
+import in.anytimework.atwbackend.masterdata.application.lookup.DesignationSummary;
+import in.anytimework.atwbackend.masterdata.domain.Designation;
+import in.anytimework.atwbackend.masterdata.domain.DesignationRepository;
 import in.anytimework.atwbackend.masterdata.domain.SkillCategory;
 import in.anytimework.atwbackend.masterdata.domain.SkillCategoryRepository;
 import in.anytimework.atwbackend.shared.api.BulkActionFailure;
@@ -26,8 +29,10 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * CRUD for skill categories - purely a minimum-wage grouping, unrelated to the
@@ -41,10 +46,13 @@ public class SkillCategoryService {
     private static final Set<String> ALLOWED_SORT = Set.of("name", "status", "createdAt");
 
     private final SkillCategoryRepository skillCategories;
+    private final DesignationRepository designations;
     private final TransactionTemplate requiresNewTransaction;
 
-    SkillCategoryService(SkillCategoryRepository skillCategories, PlatformTransactionManager transactionManager) {
+    SkillCategoryService(SkillCategoryRepository skillCategories, DesignationRepository designations,
+                        PlatformTransactionManager transactionManager) {
         this.skillCategories = skillCategories;
+        this.designations = designations;
         this.requiresNewTransaction = new TransactionTemplate(transactionManager);
         this.requiresNewTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -60,7 +68,15 @@ public class SkillCategoryService {
             predicates.add(SkillCategorySpecifications.nameContains(criteria.search()));
         }
         Page<SkillCategory> page = skillCategories.findAll(Specifications.allOf(predicates), pageable);
-        return PageResponse.from(page.map(this::toDto));
+        // Batched, not toDto(SkillCategory) per row - one query for the whole page's designations,
+        // grouped client-side, instead of one query per skill category (see toDto(SkillCategory) for
+        // the single-row counterpart used by get/create/update/etc., where that cost is fine).
+        Set<UUID> skillCategoryIds = page.getContent().stream().map(SkillCategory::getId).collect(Collectors.toSet());
+        Map<UUID, List<DesignationSummary>> designationsById = skillCategoryIds.isEmpty() ? Map.of()
+                : designations.findBySkillCategoryIdIn(skillCategoryIds).stream()
+                        .collect(Collectors.groupingBy(Designation::getSkillCategoryId,
+                                Collectors.mapping(SkillCategoryService::toSummary, Collectors.toList())));
+        return PageResponse.from(page.map(sc -> toDto(sc, designationsById.getOrDefault(sc.getId(), List.of()))));
     }
 
     @Transactional(readOnly = true)
@@ -157,7 +173,19 @@ public class SkillCategoryService {
         return skillCategories.findById(id).orElseThrow(() -> new ResourceNotFoundException("Skill category not found"));
     }
 
+    /** Single-row resolution (get/create/update/...) - only {@link #list} needs the batched designationsById map. */
     private SkillCategoryResponse toDto(SkillCategory skillCategory) {
-        return new SkillCategoryResponse(skillCategory.getId(), skillCategory.getName(), skillCategory.getCode(), skillCategory.getStatus());
+        List<DesignationSummary> designationSummaries = designations.findBySkillCategoryId(skillCategory.getId())
+                .stream().map(SkillCategoryService::toSummary).toList();
+        return toDto(skillCategory, designationSummaries);
+    }
+
+    private SkillCategoryResponse toDto(SkillCategory skillCategory, List<DesignationSummary> designationSummaries) {
+        return new SkillCategoryResponse(skillCategory.getId(), skillCategory.getName(), skillCategory.getCode(),
+                skillCategory.getStatus(), designationSummaries, designationSummaries.size());
+    }
+
+    private static DesignationSummary toSummary(Designation designation) {
+        return new DesignationSummary(designation.getId(), designation.getName());
     }
 }

@@ -178,6 +178,6 @@ public class IndustryService {
 
     private IndustryResponse toDto(Industry industry) {
         return new IndustryResponse(industry.getId(), industry.getName(), industry.getCode(), industry.getStatus(),
-                images.urlOrNull(industry.getImageDocumentId()));
+                images.urlOrNull(industry.getImageDocumentId()), industry.getCreatedAt(), industry.getUpdatedAt());
     }
 }

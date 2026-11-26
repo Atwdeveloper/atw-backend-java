@@ -10,6 +10,7 @@ import in.anytimework.atwbackend.company.domain.CompanyStatus;
 import in.anytimework.atwbackend.company.domain.CompanyStatusHistoryRepository;
 import in.anytimework.atwbackend.company.domain.CompanyUserRepository;
 import in.anytimework.atwbackend.company.domain.CompanyUserStatus;
+import in.anytimework.atwbackend.identity.application.lookup.AdminActorLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.IndustryLookupService;
 import in.anytimework.atwbackend.notification.application.NotificationService;
@@ -71,6 +72,7 @@ class CompanyServiceStatusGuardTest {
     private final NotificationService notificationService = mock(NotificationService.class);
     private final PermissionChecker permissionChecker = mock(PermissionChecker.class);
     private final CurrentAdmin currentAdmin = mock(CurrentAdmin.class);
+    private final AdminActorLookupService adminActorLookup = mock(AdminActorLookupService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-19T06:00:00Z"), ZoneOffset.UTC);
     private final CompanySecurityProperties securityProperties = new CompanySecurityProperties(
             true, Duration.ofMinutes(10), 6, 5, Duration.ofSeconds(60), 3,
@@ -82,7 +84,7 @@ class CompanyServiceStatusGuardTest {
     private CompanyService service() {
         return new CompanyService(companies, companyAddresses, statusHistory, companyUsers, authTokens,
                 refreshTokens, industryLookup, geography, gstVerificationPort, identityHasher, passwordEncoder,
-                notificationService, permissionChecker, securityProperties, currentAdmin, clock,
+                notificationService, permissionChecker, securityProperties, currentAdmin, adminActorLookup, clock,
                 "http://localhost:3000");
     }
 

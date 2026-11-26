@@ -57,6 +57,24 @@ class IndustryAdminIntegrationTest {
     }
 
     @Test
+    void create_thenUpdate_createdAtStaysFixedWhileUpdatedAtAdvances() {
+        IndustryResponse created = industryService.create(new CreateIndustryRequest("Timestamps " + unique()));
+        assertThat(created.createdAt()).isNotNull();
+        assertThat(created.updatedAt()).isNotNull();
+
+        // created.createdAt() above is the in-memory value JPA auditing stamped before the row was
+        // ever written (full Instant/nanosecond precision) - Postgres TIMESTAMPTZ stores (and rounds
+        // to) microsecond precision, so comparing it directly against anything read back from the DB
+        // is inherently flaky by a sub-microsecond margin. Every assertion below instead compares two
+        // DB-round-tripped reads against each other, which share the exact same rounding and so can be
+        // compared for literal equality.
+        IndustryResponse fetched = industryService.get(created.id());
+        IndustryResponse updated = industryService.update(created.id(), new UpdateIndustryRequest("Timestamps Renamed " + unique()));
+        assertThat(updated.createdAt()).isEqualTo(fetched.createdAt());
+        assertThat(updated.updatedAt()).isAfterOrEqualTo(fetched.updatedAt());
+    }
+
+    @Test
     void create_generatesAUniqueCodeServerSide() {
         IndustryResponse first = industryService.create(new CreateIndustryRequest("CodeGenA " + unique()));
         IndustryResponse second = industryService.create(new CreateIndustryRequest("CodeGenB " + unique()));

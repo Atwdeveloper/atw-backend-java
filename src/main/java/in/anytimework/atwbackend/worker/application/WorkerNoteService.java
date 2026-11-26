@@ -1,16 +1,21 @@
 package in.anytimework.atwbackend.worker.application;
 
+import in.anytimework.atwbackend.identity.application.lookup.AdminActorLookupService;
 import in.anytimework.atwbackend.shared.api.PageResponse;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
+import in.anytimework.atwbackend.shared.kernel.ActorRefs;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerNoteRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.WorkerNoteResponse;
 import in.anytimework.atwbackend.worker.domain.WorkerNote;
 import in.anytimework.atwbackend.worker.domain.WorkerNoteRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerRepository;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -23,22 +28,29 @@ public class WorkerNoteService {
 
     private final WorkerRepository workers;
     private final WorkerNoteRepository notes;
+    private final AdminActorLookupService adminActorLookup;
 
-    public WorkerNoteService(WorkerRepository workers, WorkerNoteRepository notes) {
+    public WorkerNoteService(WorkerRepository workers, WorkerNoteRepository notes,
+                             AdminActorLookupService adminActorLookup) {
         this.workers = workers;
         this.notes = notes;
+        this.adminActorLookup = adminActorLookup;
     }
 
     @Transactional(readOnly = true)
     public PageResponse<WorkerNoteResponse> list(UUID workerId, Pageable pageable) {
         requireWorkerExists(workerId);
-        return PageResponse.from(notes.findByWorkerIdOrderByCreatedAtDesc(workerId, pageable).map(this::toDto));
+        Page<WorkerNote> page = notes.findByWorkerIdOrderByCreatedAtDesc(workerId, pageable);
+        Map<UUID, String> namesById = adminActorLookup.findNames(
+                ActorRefs.parseableAdminIds(page.getContent().stream().map(WorkerNote::getCreatedBy).toList()));
+        return PageResponse.from(page.map(n -> toDto(n, namesById)));
     }
 
     @Transactional
     public WorkerNoteResponse create(UUID workerId, CreateWorkerNoteRequest request) {
         requireWorkerExists(workerId);
-        return toDto(notes.save(new WorkerNote(workerId, request.note())));
+        WorkerNote saved = notes.save(new WorkerNote(workerId, request.note()));
+        return toDto(saved, adminActorLookup.findNames(ActorRefs.parseableAdminIds(List.of(saved.getCreatedBy()))));
     }
 
     /**
@@ -60,7 +72,8 @@ public class WorkerNoteService {
         }
     }
 
-    private WorkerNoteResponse toDto(WorkerNote note) {
-        return new WorkerNoteResponse(note.getId(), note.getNote(), note.getCreatedBy(), note.getCreatedAt());
+    private WorkerNoteResponse toDto(WorkerNote note, Map<UUID, String> namesById) {
+        return new WorkerNoteResponse(note.getId(), note.getNote(),
+                ActorRefs.fromAuditString(note.getCreatedBy(), namesById), note.getCreatedAt());
     }
 }

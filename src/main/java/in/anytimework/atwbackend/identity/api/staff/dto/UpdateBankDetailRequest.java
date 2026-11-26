@@ -21,9 +21,6 @@ public record UpdateBankDetailRequest(
         @Size(max = 30) String accountNumber,
 
         @Schema(description = "IFSC code. No format validation.", example = "TEST0001234", nullable = true)
-        @Size(max = 15) String ifscCode,
-
-        @Schema(description = "Branch name.", example = "MG Road", nullable = true)
-        @Size(max = 150) String branchName
+        @Size(max = 15) String ifscCode
 ) {
 }

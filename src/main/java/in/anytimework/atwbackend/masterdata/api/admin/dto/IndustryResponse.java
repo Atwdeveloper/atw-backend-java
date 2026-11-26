@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.masterdata.api.admin.dto;
 import in.anytimework.atwbackend.shared.kernel.ActiveStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
+import java.time.Instant;
 import java.util.UUID;
 
 public record IndustryResponse(
@@ -15,6 +16,8 @@ public record IndustryResponse(
                 + "when none is set. Always null in the List response regardless of whether an icon exists "
                 + "(resolving it there would be expensive at scale) - only GET /{id} resolves a real value.",
                 nullable = true)
-        String imageUrl
+        String imageUrl,
+        Instant createdAt,
+        Instant updatedAt
 ) {
 }
