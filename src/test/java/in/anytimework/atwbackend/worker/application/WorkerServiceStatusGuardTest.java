@@ -2,6 +2,7 @@ package in.anytimework.atwbackend.worker.application;
 
 import in.anytimework.atwbackend.document.application.DocumentService;
 import in.anytimework.atwbackend.faceauth.application.FaceAuthService;
+import in.anytimework.atwbackend.identity.application.lookup.AdminActorLookupService;
 import in.anytimework.atwbackend.kyc.application.KycService;
 import in.anytimework.atwbackend.masterdata.application.lookup.DesignationLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
@@ -9,6 +10,9 @@ import in.anytimework.atwbackend.masterdata.application.lookup.IndustryLookupSer
 import in.anytimework.atwbackend.masterdata.application.lookup.SkillLookupService;
 import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.kernel.ActorType;
+import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
+import in.anytimework.atwbackend.worker.api.admin.dto.WorkerStatusHistoryResponse;
 import in.anytimework.atwbackend.worker.domain.Gender;
 import in.anytimework.atwbackend.worker.domain.Worker;
 import in.anytimework.atwbackend.worker.domain.WorkerAddressRepository;
@@ -16,20 +20,30 @@ import in.anytimework.atwbackend.worker.domain.WorkerDesignationRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerSkillRepository;
 import in.anytimework.atwbackend.worker.domain.WorkerStatus;
+import in.anytimework.atwbackend.worker.domain.WorkerStatusHistory;
 import in.anytimework.atwbackend.worker.domain.WorkerStatusHistoryRepository;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -57,6 +71,8 @@ class WorkerServiceStatusGuardTest {
     private final FaceAuthService faceAuthService = mock(FaceAuthService.class);
     private final DocumentService documentService = mock(DocumentService.class);
     private final WorkerProfilePhotoSupport photoSupport = mock(WorkerProfilePhotoSupport.class);
+    private final AdminActorLookupService adminActorLookup = mock(AdminActorLookupService.class);
+    private final CurrentAdmin currentAdmin = mock(CurrentAdmin.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-10T06:00:00Z"), ZoneOffset.UTC);
 
     private final Worker worker = new Worker("WRK0000001", "Ramesh", null, "Kumar", null, Gender.MALE,
@@ -65,7 +81,7 @@ class WorkerServiceStatusGuardTest {
     private WorkerService service() {
         return new WorkerService(workers, workerDesignations, workerSkills, statusHistory, workerAddresses,
                 industryLookup, designationLookup, skillLookup, geography, kycService,
-                faceAuthService, documentService, photoSupport, clock);
+                faceAuthService, documentService, photoSupport, adminActorLookup, currentAdmin, clock);
     }
 
     private void stubExistingWorker() {
@@ -157,6 +173,50 @@ class WorkerServiceStatusGuardTest {
         stubExistingWorker();
         assertThatCode(() -> service().updateStatus(worker.getId(), WorkerStatus.ACTIVE, null))
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void updateStatus_recordsTheActingAdminsIdOnTheHistoryRow() {
+        UUID adminId = UUID.randomUUID();
+        when(currentAdmin.id()).thenReturn(Optional.of(adminId));
+        stubExistingWorker();
+
+        service().updateStatus(worker.getId(), WorkerStatus.INACTIVE, "On leave");
+
+        ArgumentCaptor<WorkerStatusHistory> captor = ArgumentCaptor.forClass(WorkerStatusHistory.class);
+        verify(statusHistory).save(captor.capture());
+        assertThat(captor.getValue().getChangedByAdminId()).isEqualTo(adminId);
+    }
+
+    @Test
+    void listStatusHistory_resolvesAnAdminRowAndASystemRowCorrectly() {
+        UUID adminId = UUID.randomUUID();
+        when(workers.existsById(worker.getId())).thenReturn(true);
+        when(statusHistory.findByWorkerIdOrderByCreatedAtDesc(eq(worker.getId()), any()))
+                .thenReturn(new PageImpl<>(List.of(systemRow(worker.getId()), adminRow(worker.getId(), adminId))));
+        when(adminActorLookup.findNames(Set.of(adminId))).thenReturn(Map.of(adminId, "Rahul Prajapat"));
+
+        List<WorkerStatusHistoryResponse> page = service()
+                .listStatusHistory(worker.getId(), PageRequest.of(0, 10)).content();
+
+        WorkerStatusHistoryResponse adminEntry = page.stream().filter(h -> h.toStatus() == WorkerStatus.ACTIVE)
+                .findFirst().orElseThrow();
+        assertThat(adminEntry.changedBy().userType()).isEqualTo(ActorType.ADMIN);
+        assertThat(adminEntry.changedBy().id()).isEqualTo(adminId);
+        assertThat(adminEntry.changedBy().name()).isEqualTo("Rahul Prajapat");
+
+        WorkerStatusHistoryResponse systemEntry = page.stream().filter(h -> h.toStatus() == WorkerStatus.REGISTERED)
+                .findFirst().orElseThrow();
+        assertThat(systemEntry.changedBy().userType()).isEqualTo(ActorType.SYSTEM);
+        assertThat(systemEntry.changedBy().id()).isNull();
+    }
+
+    private static WorkerStatusHistory systemRow(UUID workerId) {
+        return new WorkerStatusHistory(workerId, null, WorkerStatus.REGISTERED, null, null);
+    }
+
+    private static WorkerStatusHistory adminRow(UUID workerId, UUID adminId) {
+        return new WorkerStatusHistory(workerId, WorkerStatus.KYC_PENDING, WorkerStatus.ACTIVE, null, adminId);
     }
 
     @Test

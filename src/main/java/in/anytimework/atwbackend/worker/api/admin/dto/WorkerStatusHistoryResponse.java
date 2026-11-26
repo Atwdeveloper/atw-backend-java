@@ -1,5 +1,6 @@
 package in.anytimework.atwbackend.worker.api.admin.dto;
 
+import in.anytimework.atwbackend.shared.kernel.ActorRef;
 import in.anytimework.atwbackend.worker.domain.WorkerStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -15,10 +16,11 @@ public record WorkerStatusHistoryResponse(
         WorkerStatus toStatus,
         @Schema(description = "Captured whenever the target status is SUSPENDED, BLACKLISTED, or "
                 + "INACTIVE; null for every other transition.", nullable = true) String reason,
-        @Schema(description = "Username of the admin who made the change, or \"system\" for the one "
-                + "transition this endpoint never makes directly - the automatic REGISTERED/KYC_PENDING "
-                + "to ACTIVE move triggered by KYC verification, which runs asynchronously outside any "
-                + "admin's own request.", example = "admin@anytimework.in") String changedBy,
+        @Schema(description = "Who made the change, resolved for display - userType SYSTEM (id null, "
+                + "name \"System\") for the one transition this endpoint never makes directly: the "
+                + "automatic REGISTERED/KYC_PENDING to ACTIVE move triggered by KYC verification, which "
+                + "runs asynchronously outside any admin's own request. Every other row is userType ADMIN.")
+        ActorRef changedBy,
         Instant changedAt
 ) {
 }

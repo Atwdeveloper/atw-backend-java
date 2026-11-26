@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public interface DesignationRepository extends JpaRepository<Designation, UUID>, JpaSpecificationExecutor<Designation> {
@@ -19,6 +20,12 @@ public interface DesignationRepository extends JpaRepository<Designation, UUID>,
 
     /** Used by the cross-module {@code DesignationLookupService} (dropdowns want every designation, unpaginated), not by the admin list endpoint. */
     List<Designation> findAllByOrderByName();
+
+    /** Single-row resolution - see {@link #findBySkillCategoryIdIn} for the batched counterpart a whole list page uses instead. */
+    List<Designation> findBySkillCategoryId(UUID skillCategoryId);
+
+    /** One query for a whole page of skill categories' assigned designations, grouped client-side by skillCategoryId - never one query per row. */
+    List<Designation> findBySkillCategoryIdIn(Set<UUID> skillCategoryIds);
 
     /**
      * Locks the row for update; serializes a concurrent full industry-replace of this designation

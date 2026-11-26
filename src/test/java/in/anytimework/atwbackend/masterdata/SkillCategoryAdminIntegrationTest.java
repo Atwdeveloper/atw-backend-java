@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.masterdata;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateDesignationRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateIndustryRequest;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.CreateSkillCategoryRequest;
+import in.anytimework.atwbackend.masterdata.api.admin.dto.DesignationResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.IndustryResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.SkillCategoryResponse;
 import in.anytimework.atwbackend.masterdata.api.admin.dto.UpdateSkillCategoryRequest;
@@ -47,8 +48,12 @@ class SkillCategoryAdminIntegrationTest {
 
     /** A designation assigned to {@code skillCategoryId} - exists purely to exercise the delete-guard tests below. */
     private void createDesignationInSkillCategory(UUID skillCategoryId) {
+        createDesignationInSkillCategoryNamed("Role " + unique(), skillCategoryId);
+    }
+
+    private DesignationResponse createDesignationInSkillCategoryNamed(String name, UUID skillCategoryId) {
         IndustryResponse industry = industryService.create(new CreateIndustryRequest("Ind " + unique()));
-        designationService.create(new CreateDesignationRequest("Role " + unique(), Set.of(industry.id()), industry.id(), skillCategoryId));
+        return designationService.create(new CreateDesignationRequest(name, Set.of(industry.id()), industry.id(), skillCategoryId));
     }
 
     @Test
@@ -60,6 +65,53 @@ class SkillCategoryAdminIntegrationTest {
         SkillCategoryResponse fetched = skillCategoryService.get(created.id());
         assertThat(fetched.name()).isEqualTo(created.name());
         assertThat(fetched.code()).isEqualTo(created.code());
+    }
+
+    @Test
+    void create_thenGet_hasNoDesignationsYet() {
+        SkillCategoryResponse created = skillCategoryService.create(new CreateSkillCategoryRequest("Empty " + unique()));
+
+        assertThat(created.designations()).isEmpty();
+        assertThat(created.designationCount()).isZero();
+        SkillCategoryResponse fetched = skillCategoryService.get(created.id());
+        assertThat(fetched.designations()).isEmpty();
+        assertThat(fetched.designationCount()).isZero();
+    }
+
+    @Test
+    void get_returnsEveryAssignedDesignationWithIdAndNameAndACount() {
+        SkillCategoryResponse skillCategory = skillCategoryService.create(new CreateSkillCategoryRequest("Masons " + unique()));
+        DesignationResponse first = createDesignationInSkillCategoryNamed("Mason " + unique(), skillCategory.id());
+        DesignationResponse second = createDesignationInSkillCategoryNamed("Fitter " + unique(), skillCategory.id());
+
+        SkillCategoryResponse fetched = skillCategoryService.get(skillCategory.id());
+
+        assertThat(fetched.designationCount()).isEqualTo(2);
+        assertThat(fetched.designations()).extracting(d -> d.id()).containsExactlyInAnyOrder(first.id(), second.id());
+        assertThat(fetched.designations()).extracting(d -> d.name()).containsExactlyInAnyOrder(first.name(), second.name());
+    }
+
+    @Test
+    void list_resolvesEachRowsOwnDesignationsWithoutMixingThemUpAcrossThePage() {
+        // Proves the batched (not per-row) resolution in SkillCategoryService.list genuinely groups by
+        // the right skillCategoryId - two categories on the same page, different designation counts.
+        String prefix = "BatchedDesig " + unique();
+        SkillCategoryResponse withTwo = skillCategoryService.create(new CreateSkillCategoryRequest(prefix + " WithTwo"));
+        SkillCategoryResponse withOne = skillCategoryService.create(new CreateSkillCategoryRequest(prefix + " WithOne"));
+        DesignationResponse d1 = createDesignationInSkillCategoryNamed("D1 " + unique(), withTwo.id());
+        DesignationResponse d2 = createDesignationInSkillCategoryNamed("D2 " + unique(), withTwo.id());
+        DesignationResponse d3 = createDesignationInSkillCategoryNamed("D3 " + unique(), withOne.id());
+
+        List<SkillCategoryResponse> page = skillCategoryService
+                .list(new SkillCategorySearchCriteria(null, prefix), PageRequest.of(0, 100))
+                .content();
+
+        SkillCategoryResponse withTwoRow = page.stream().filter(r -> r.id().equals(withTwo.id())).findFirst().orElseThrow();
+        SkillCategoryResponse withOneRow = page.stream().filter(r -> r.id().equals(withOne.id())).findFirst().orElseThrow();
+        assertThat(withTwoRow.designationCount()).isEqualTo(2);
+        assertThat(withTwoRow.designations()).extracting(d -> d.id()).containsExactlyInAnyOrder(d1.id(), d2.id());
+        assertThat(withOneRow.designationCount()).isEqualTo(1);
+        assertThat(withOneRow.designations()).extracting(d -> d.id()).containsExactly(d3.id());
     }
 
     @Test

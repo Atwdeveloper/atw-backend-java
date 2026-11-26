@@ -45,7 +45,7 @@ public class AdminStaffBankDetailService {
     public AdminUserBankDetailResponse get(UUID staffId) {
         requireStaffExists(staffId);
         return bankDetails.findByAdminUserId(staffId).map(this::toResponseDto)
-                .orElse(new AdminUserBankDetailResponse(null, null, null, null, null));
+                .orElse(new AdminUserBankDetailResponse(null, null, null, null));
     }
 
     @Transactional
@@ -56,8 +56,7 @@ public class AdminStaffBankDetailService {
         }
         AdminUserBankDetail detail = bankDetails.findByAdminUserId(staffId)
                 .orElseGet(() -> new AdminUserBankDetail(staffId));
-        detail.update(request.accountHolderName(), request.bankName(), request.accountNumber(),
-                request.ifscCode(), request.branchName());
+        detail.update(request.accountHolderName(), request.bankName(), request.accountNumber(), request.ifscCode());
         detail = bankDetails.save(detail);
         audit.record(currentAdmin.id().orElse(null), "ADMIN_STAFF_BANK_DETAIL_UPDATED", staffId.toString(), ip, userAgent);
         return toResponseDto(detail);
@@ -71,6 +70,6 @@ public class AdminStaffBankDetailService {
         boolean unmasked = permissionChecker.has("admin_staff.view_bank_details");
         String accountNumber = unmasked ? detail.getAccountNumber() : PiiMasking.maskTail(detail.getAccountNumber());
         return new AdminUserBankDetailResponse(detail.getAccountHolderName(), detail.getBankName(),
-                accountNumber, detail.getIfscCode(), detail.getBranchName());
+                accountNumber, detail.getIfscCode());
     }
 }

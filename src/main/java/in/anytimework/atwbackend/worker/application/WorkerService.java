@@ -3,6 +3,7 @@ package in.anytimework.atwbackend.worker.application;
 import in.anytimework.atwbackend.document.application.DocumentService;
 import in.anytimework.atwbackend.faceauth.application.FaceAuthService;
 import in.anytimework.atwbackend.faceauth.application.dto.FaceEnrollmentDto;
+import in.anytimework.atwbackend.identity.application.lookup.AdminActorLookupService;
 import in.anytimework.atwbackend.kyc.application.KycService;
 import in.anytimework.atwbackend.kyc.application.KycStatus;
 import in.anytimework.atwbackend.kyc.application.KycVerificationCompletionResult;
@@ -23,8 +24,10 @@ import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
 import in.anytimework.atwbackend.shared.export.ExcelWriter;
 import in.anytimework.atwbackend.shared.kernel.Address;
+import in.anytimework.atwbackend.shared.kernel.ActorRefs;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
+import in.anytimework.atwbackend.shared.security.jwt.CurrentAdmin;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerDesignationsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.AssignWorkerSkillsRequest;
 import in.anytimework.atwbackend.worker.api.admin.dto.CreateWorkerRequest;
@@ -65,6 +68,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -116,6 +120,8 @@ public class WorkerService {
     private final FaceAuthService faceAuthService;
     private final DocumentService documentService;
     private final WorkerProfilePhotoSupport photoSupport;
+    private final AdminActorLookupService adminActorLookup;
+    private final CurrentAdmin currentAdmin;
     private final Clock clock;
 
     public WorkerService(WorkerRepository workers, WorkerDesignationRepository workerDesignations,
@@ -124,7 +130,8 @@ public class WorkerService {
                          IndustryLookupService industryLookup, DesignationLookupService designationLookup,
                          SkillLookupService skillLookup, GeographyLookupService geography, KycService kycService,
                          FaceAuthService faceAuthService, DocumentService documentService,
-                         WorkerProfilePhotoSupport photoSupport, Clock clock) {
+                         WorkerProfilePhotoSupport photoSupport, AdminActorLookupService adminActorLookup,
+                         CurrentAdmin currentAdmin, Clock clock) {
         this.workers = workers;
         this.workerDesignations = workerDesignations;
         this.workerSkills = workerSkills;
@@ -138,6 +145,8 @@ public class WorkerService {
         this.faceAuthService = faceAuthService;
         this.documentService = documentService;
         this.photoSupport = photoSupport;
+        this.adminActorLookup = adminActorLookup;
+        this.currentAdmin = currentAdmin;
         this.clock = clock;
     }
 
@@ -151,9 +160,13 @@ public class WorkerService {
         if (!workers.existsById(id)) {
             throw new ResourceNotFoundException("Worker not found");
         }
-        return PageResponse.from(statusHistory.findByWorkerIdOrderByCreatedAtDesc(id, pageable)
-                .map(h -> new WorkerStatusHistoryResponse(h.getId(), h.getFromStatus(), h.getToStatus(),
-                        h.getReason(), h.getCreatedBy(), h.getCreatedAt())));
+        Page<WorkerStatusHistory> page = statusHistory.findByWorkerIdOrderByCreatedAtDesc(id, pageable);
+        Set<UUID> adminIds = page.getContent().stream()
+                .map(WorkerStatusHistory::getChangedByAdminId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<UUID, String> namesById = adminActorLookup.findNames(adminIds);
+        return PageResponse.from(page.map(h -> new WorkerStatusHistoryResponse(h.getId(), h.getFromStatus(),
+                h.getToStatus(), h.getReason(), ActorRefs.fromAdminId(h.getChangedByAdminId(), namesById),
+                h.getCreatedAt())));
     }
 
     @Transactional(readOnly = true)
@@ -253,7 +266,8 @@ public class WorkerService {
 
         saveDesignations(worker.getId(), request.designationIds(), request.primaryDesignationId());
         saveSkills(worker.getId(), request.skillIds());
-        statusHistory.save(new WorkerStatusHistory(worker.getId(), null, WorkerStatus.REGISTERED, null));
+        statusHistory.save(new WorkerStatusHistory(worker.getId(), null, WorkerStatus.REGISTERED, null,
+                currentAdmin.id().orElse(null)));
 
         if (request.aadhaarVerificationId() != null) {
             // Consumes the verification (see KycService.completeFromVerification's Javadoc); an
@@ -378,7 +392,8 @@ public class WorkerService {
         WorkerStatus oldStatus = worker.getStatus();
         worker.changeStatus(newStatus, reason);
         workers.save(worker);
-        statusHistory.save(new WorkerStatusHistory(worker.getId(), oldStatus, newStatus, reason));
+        statusHistory.save(new WorkerStatusHistory(worker.getId(), oldStatus, newStatus, reason,
+                currentAdmin.id().orElse(null)));
     }
 
     /**

@@ -21,9 +21,6 @@ public record AdminUserBankDetailResponse(
         String accountNumber,
 
         @Schema(description = "IFSC code. Never masked, no format validation.", example = "TEST0001234", nullable = true)
-        String ifscCode,
-
-        @Schema(description = "Branch name. Never masked.", example = "MG Road", nullable = true)
-        String branchName
+        String ifscCode
 ) {
 }

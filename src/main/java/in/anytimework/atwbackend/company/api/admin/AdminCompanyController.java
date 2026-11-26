@@ -378,7 +378,7 @@ public class AdminCompanyController {
 
     private static CompanyStatusHistoryResponse toHistoryResponse(CompanyStatusHistoryView view) {
         return new CompanyStatusHistoryResponse(view.id(), view.fromStatus(), view.toStatus(), view.reason(),
-                view.changedByAdminEmail(), view.changedAt());
+                view.changedBy(), view.changedAt());
     }
 
     /** No {@code PageResponse.map(...)} exists on purpose (it is a plain transport record, not a functor) - this reconstructs one with its content mapped, keeping every paging field intact. */

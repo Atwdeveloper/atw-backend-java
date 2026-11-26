@@ -15,6 +15,7 @@ import in.anytimework.atwbackend.company.domain.CompanyUser;
 import in.anytimework.atwbackend.company.domain.CompanyUserRepository;
 import in.anytimework.atwbackend.company.domain.CompanyUserRole;
 import in.anytimework.atwbackend.company.domain.CompanyUserStatus;
+import in.anytimework.atwbackend.identity.application.lookup.AdminActorLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.GeographyLookupService;
 import in.anytimework.atwbackend.masterdata.application.lookup.IndustryLookupService;
 import in.anytimework.atwbackend.notification.application.NotificationService;
@@ -26,6 +27,7 @@ import in.anytimework.atwbackend.shared.exception.BusinessRuleException;
 import in.anytimework.atwbackend.shared.exception.ConflictException;
 import in.anytimework.atwbackend.shared.exception.ResourceNotFoundException;
 import in.anytimework.atwbackend.shared.exception.ValidationException;
+import in.anytimework.atwbackend.shared.kernel.ActorRefs;
 import in.anytimework.atwbackend.shared.persistence.SortValidation;
 import in.anytimework.atwbackend.shared.persistence.Specifications;
 import in.anytimework.atwbackend.shared.security.CompanyIdentityNumberHasher;
@@ -50,8 +52,10 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Company lifecycle: create (with full owner-account provisioning), update, get, list, soft delete,
@@ -122,6 +126,7 @@ public class CompanyService {
     private final PermissionChecker permissionChecker;
     private final CompanySecurityProperties securityProperties;
     private final CurrentAdmin currentAdmin;
+    private final AdminActorLookupService adminActorLookup;
     private final Clock clock;
     private final String frontendBaseUrl;
 
@@ -132,7 +137,7 @@ public class CompanyService {
                           GstVerificationPort gstVerificationPort, CompanyIdentityNumberHasher identityHasher,
                           PasswordEncoder passwordEncoder, NotificationService notificationService,
                           PermissionChecker permissionChecker, CompanySecurityProperties securityProperties,
-                          CurrentAdmin currentAdmin, Clock clock,
+                          CurrentAdmin currentAdmin, AdminActorLookupService adminActorLookup, Clock clock,
                           @Value("${atw.frontend.base-url}") String frontendBaseUrl) {
         this.companies = companies;
         this.companyAddresses = companyAddresses;
@@ -149,6 +154,7 @@ public class CompanyService {
         this.permissionChecker = permissionChecker;
         this.securityProperties = securityProperties;
         this.currentAdmin = currentAdmin;
+        this.adminActorLookup = adminActorLookup;
         this.clock = clock;
         this.frontendBaseUrl = frontendBaseUrl;
     }
@@ -397,9 +403,12 @@ public class CompanyService {
         if (!companies.existsById(id)) {
             throw new ResourceNotFoundException("Company not found");
         }
-        return PageResponse.from(statusHistory.findByCompanyIdOrderByCreatedAtDesc(id, pageable)
-                .map(h -> new CompanyStatusHistoryView(h.getId(), h.getFromStatus(), h.getToStatus(), h.getReason(),
-                        h.getChangedByAdminEmail(), h.getCreatedAt())));
+        Page<CompanyStatusHistory> page = statusHistory.findByCompanyIdOrderByCreatedAtDesc(id, pageable);
+        Set<UUID> adminIds = page.getContent().stream()
+                .map(CompanyStatusHistory::getChangedByAdminId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<UUID, String> namesById = adminActorLookup.findNames(adminIds);
+        return PageResponse.from(page.map(h -> new CompanyStatusHistoryView(h.getId(), h.getFromStatus(), h.getToStatus(),
+                h.getReason(), ActorRefs.fromAdminId(h.getChangedByAdminId(), namesById), h.getCreatedAt())));
     }
 
     private void applyStatusChange(Company company, CompanyStatus oldStatus, CompanyStatus newStatus, String reason) {

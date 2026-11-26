@@ -766,12 +766,12 @@ public class AdminStaffController {
     @GetMapping("/{id}/bank-detail")
     @PreAuthorize("@authz.has('admin_staff.view')")
     @Operation(summary = "Get a staff member's bank/payout details",
-            description = "Returns `{accountHolderName, bankName, accountNumber, ifscCode, branchName}` - all "
+            description = "Returns `{accountHolderName, bankName, accountNumber, ifscCode}` - all "
                     + "`null` until set (no 404 if never saved). `accountNumber` is encrypted at rest (same "
                     + "mechanism as KYC).\n\n**Masking:** `accountNumber` follows the exact same masking rule as "
                     + "KYC above, gated by `admin_staff.view_bank_details` instead of `admin_staff.view_kyc` (same "
                     + "two seed roles hold it by default, but they are two independent permission codes - holding "
-                    + "one does not imply the other). `accountHolderName`, `bankName`, `ifscCode`, `branchName` are "
+                    + "one does not imply the other). `accountHolderName`, `bankName`, `ifscCode` are "
                     + "**never masked** - only the account number is treated as sensitive here.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Masked (caller holds only `admin_staff.view`).",
@@ -783,8 +783,7 @@ public class AdminStaffController {
                                         "accountHolderName": "Staff Holder",
                                         "bankName": "Test Bank",
                                         "accountNumber": "********2333",
-                                        "ifscCode": "TEST0001234",
-                                        "branchName": "MG Road"
+                                        "ifscCode": "TEST0001234"
                                       },
                                       "error": null
                                     }"""),
@@ -795,8 +794,7 @@ public class AdminStaffController {
                                         "accountHolderName": "Staff Holder",
                                         "bankName": "Test Bank",
                                         "accountNumber": "000111222333",
-                                        "ifscCode": "TEST0001234",
-                                        "branchName": "MG Road"
+                                        "ifscCode": "TEST0001234"
                                       },
                                       "error": null
                                     }""")
@@ -824,9 +822,9 @@ public class AdminStaffController {
     @PutMapping("/{id}/bank-detail")
     @PreAuthorize("@authz.has('admin_staff.edit')")
     @Operation(summary = "Replace a staff member's bank/payout details",
-            description = "Every field optional (progressive capture): `accountHolderName`/`bankName`/`branchName` "
+            description = "Every field optional (progressive capture): `accountHolderName`/`bankName` "
                     + "max 150 chars, `accountNumber` max 30, `ifscCode` max 15. No IFSC-format or account-number-"
-                    + "checksum validation, same rationale as KYC. Full replace of all 5 fields; creates the row on "
+                    + "checksum validation, same rationale as KYC. Full replace of all 4 fields; creates the row on "
                     + "first write if it doesn't exist yet. Same no-separate-write-permission reasoning as Update "
                     + "Staff KYC. The response's `accountNumber` is masked using the same rule as Get Staff Bank "
                     + "Detail. Rejected with `422 BUSINESS_RULE_VIOLATION` if the target is a super-admin account. "
@@ -840,8 +838,7 @@ public class AdminStaffController {
                                 "accountHolderName": "Staff Holder",
                                 "bankName": "Test Bank",
                                 "accountNumber": "********2333",
-                                "ifscCode": "TEST0001234",
-                                "branchName": "MG Road"
+                                "ifscCode": "TEST0001234"
                               },
                               "error": null
                             }"""))),

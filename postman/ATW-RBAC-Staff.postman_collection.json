@@ -2423,7 +2423,7 @@
                 "bank-detail"
               ]
             },
-            "description": "**Permission:** `admin_staff.view` (for a masked account number) — see below for unmasked.\n\nReturns `{accountHolderName, bankName, accountNumber, ifscCode, branchName}` — all `null` until set. `accountNumber` is **encrypted at rest** (same mechanism as KYC).\n\n**Masking:** `accountNumber` follows the exact same masking rule as KYC above, gated by `admin_staff.view_bank_details` instead of `admin_staff.view_kyc` (same two seed roles hold it by default, but they're two independent permission codes — holding one does not imply the other). `accountHolderName`, `bankName`, `ifscCode`, `branchName` are **never masked** — only the account number is treated as sensitive here.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
+            "description": "**Permission:** `admin_staff.view` (for a masked account number) — see below for unmasked.\n\nReturns `{accountHolderName, bankName, accountNumber, ifscCode}` — all `null` until set. `accountNumber` is **encrypted at rest** (same mechanism as KYC).\n\n**Masking:** `accountNumber` follows the exact same masking rule as KYC above, gated by `admin_staff.view_bank_details` instead of `admin_staff.view_kyc` (same two seed roles hold it by default, but they're two independent permission codes — holding one does not imply the other). `accountHolderName`, `bankName`, `ifscCode` are **never masked** — only the account number is treated as sensitive here.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |"
           },
           "event": [
             {
@@ -2472,7 +2472,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"********2333\",\n    \"ifscCode\": \"TEST0001234\",\n    \"branchName\": \"MG Road\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"********2333\",\n    \"ifscCode\": \"TEST0001234\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "200 - Unmasked (admin_staff.view_bank_details)",
@@ -2503,7 +2503,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"000111222333\",\n    \"ifscCode\": \"TEST0001234\",\n    \"branchName\": \"MG Road\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"000111222333\",\n    \"ifscCode\": \"TEST0001234\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "404 - Unknown staff id",
@@ -2562,10 +2562,10 @@
                 "bank-detail"
               ]
             },
-            "description": "**Permission:** `admin_staff.edit` (same reasoning as Update Staff KYC — no separate write permission).\n\n**Validation** — every field optional (progressive capture): `accountHolderName`/`bankName`/`branchName` max 150 chars, `accountNumber` max 30, `ifscCode` max 15. No IFSC-format or account-number-checksum validation, same rationale as KYC.\n\n**Behavior:** full replace of all 5 fields. Creates the row on first write if it doesn't exist yet. The response's `accountNumber` is masked using the same rule as Get Staff Bank Detail.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n| Any field exceeds its max length | `VALIDATION_ERROR` | 400 |\n\nAudits `STAFF_BANK_DETAIL_UPDATED`.",
+            "description": "**Permission:** `admin_staff.edit` (same reasoning as Update Staff KYC — no separate write permission).\n\n**Validation** — every field optional (progressive capture): `accountHolderName`/`bankName` max 150 chars, `accountNumber` max 30, `ifscCode` max 15. No IFSC-format or account-number-checksum validation, same rationale as KYC.\n\n**Behavior:** full replace of all 4 fields. Creates the row on first write if it doesn't exist yet. The response's `accountNumber` is masked using the same rule as Get Staff Bank Detail.\n\n**Errors**\n\n| Condition | Code | HTTP |\n|---|---|---|\n| Staff id doesn't exist | `RESOURCE_NOT_FOUND` | 404 |\n| Target is a super-admin account | `BUSINESS_RULE_VIOLATION` | 422 |\n| Any field exceeds its max length | `VALIDATION_ERROR` | 400 |\n\nAudits `STAFF_BANK_DETAIL_UPDATED`.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\",\n  \"branchName\": \"MG Road\"\n}"
+              "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\"\n}"
             }
           },
           "event": [
@@ -2612,7 +2612,7 @@
                 },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\",\n  \"branchName\": \"MG Road\"\n}"
+                  "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\"\n}"
                 }
               },
               "status": "OK",
@@ -2624,7 +2624,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"********2333\",\n    \"ifscCode\": \"TEST0001234\",\n    \"branchName\": \"MG Road\"\n  },\n  \"error\": null\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accountHolderName\": \"Staff Holder\",\n    \"bankName\": \"Test Bank\",\n    \"accountNumber\": \"********2333\",\n    \"ifscCode\": \"TEST0001234\"\n  },\n  \"error\": null\n}"
             },
             {
               "name": "422 - Target is a super-admin account",
@@ -2652,7 +2652,7 @@
                 },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\",\n  \"branchName\": \"MG Road\"\n}"
+                  "raw": "{\n  \"accountHolderName\": \"Staff Holder\",\n  \"bankName\": \"Test Bank\",\n  \"accountNumber\": \"000111222333\",\n  \"ifscCode\": \"TEST0001234\"\n}"
                 }
               },
               "status": "Unprocessable Content",
